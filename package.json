@@ -1,0 +1,39 @@
+{
+  "name": "hindsight",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hindsight — AI investment-strategy backtester. Chat-driven; a Codex agent writes and runs real backtests.",
+  "license": "MIT",
+  "homepage": "https://hindsight.build",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "packageManager": "bun@1.3.5",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "seed": "node scripts/seed.mjs",
+    "docker:build": "docker build -t hindsight-agent:latest ./docker"
+  },
+  "dependencies": {
+    "nanoid": "^5.0.7",
+    "next": "16.2.11",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "16.2.11",
+    "typescript": "^5.5.4"
+  },
+  "overrides": {
+    "sharp": "^0.35.3",
+    "postcss": "^8.5.22"
+  }
+}

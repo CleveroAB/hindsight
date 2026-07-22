@@ -1,0 +1,14 @@
+.git
+.gitignore
+node_modules
+npm-debug.log
+*.md
+!AGENTS.md
+!README.md
+data
+work
+*.ndjson
+*.log
+.DS_Store
+.env
+.env.*

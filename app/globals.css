@@ -1,0 +1,258 @@
+/* ==========================================================================
+   Hindsight — global styles & design tokens
+   Token values come from the handoff README + Backtester.dc.html.
+   Theming: :root defaults to LIGHT. prefers-color-scheme:dark swaps to DARK.
+   A manual override stamps data-theme on <html>, which WINS over the media query
+   (both directions), and is persisted (see lib/theme.ts).
+   ========================================================================== */
+
+/* Schibsted Grotesk is loaded via <link> in app/layout.tsx (Google Fonts). */
+
+:root {
+  --bg: #f7f7f5;
+  --surface: #ffffff;
+  --text: #17191b;
+  --muted: #a6a9a0;
+  --icon: #70756f;
+  --faint: #c0c2ba;
+  --border-input: #e2e2dc;
+  --border-chrome: #e4e4df;
+  --hairline: #ecece7;
+  --green-text: #159a5b;
+  --green-stroke: #1fbe6e;
+  --red: #d9494f;
+  --bubble: #efefea;
+  --chat-text: #17191b;
+  --benchmark: #b9bcb3;
+  --primary-bg: #17191b;
+  --primary-text: #f7f7f5;
+  --area-alpha: 0.18;
+  --card-shadow: 0 10px 34px rgba(20, 22, 20, 0.07);
+  --spinner-track: #d9d9d3;
+
+  --r-prompt: 22px;
+  --r-card: 16px;
+  --r-pill: 10px;
+  --r-round: 999px;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0c0d0c;
+    --surface: #141614;
+    --text: #f2f3ef;
+    --muted: #6b7066;
+    --icon: #8f948c;
+    --faint: #4a4e46;
+    --border-input: #2a2c27;
+    --border-chrome: #2a2c27;
+    --hairline: #1c1e1b;
+    --green-text: #2fd67e;
+    --green-stroke: #2fd67e;
+    --red: #f2555b;
+    --bubble: #1c1f1c;
+    --chat-text: #e4e6e0;
+    --benchmark: #4a4e46;
+    --primary-bg: #f2f3ef;
+    --primary-text: #0c0d0c;
+    --area-alpha: 0.22;
+    --card-shadow: 0 10px 34px rgba(0, 0, 0, 0.4);
+    --spinner-track: #2a2c27;
+
+    color-scheme: dark;
+  }
+}
+
+/* Manual overrides win over the media query, in both directions. */
+:root[data-theme='light'] {
+  --bg: #f7f7f5;
+  --surface: #ffffff;
+  --text: #17191b;
+  --muted: #a6a9a0;
+  --icon: #70756f;
+  --faint: #c0c2ba;
+  --border-input: #e2e2dc;
+  --border-chrome: #e4e4df;
+  --hairline: #ecece7;
+  --green-text: #159a5b;
+  --green-stroke: #1fbe6e;
+  --red: #d9494f;
+  --bubble: #efefea;
+  --chat-text: #17191b;
+  --benchmark: #b9bcb3;
+  --primary-bg: #17191b;
+  --primary-text: #f7f7f5;
+  --area-alpha: 0.18;
+  --card-shadow: 0 10px 34px rgba(20, 22, 20, 0.07);
+  --spinner-track: #d9d9d3;
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --bg: #0c0d0c;
+  --surface: #141614;
+  --text: #f2f3ef;
+  --muted: #6b7066;
+  --icon: #8f948c;
+  --faint: #4a4e46;
+  --border-input: #2a2c27;
+  --border-chrome: #2a2c27;
+  --hairline: #1c1e1b;
+  --green-text: #2fd67e;
+  --green-stroke: #2fd67e;
+  --red: #f2555b;
+  --bubble: #1c1f1c;
+  --chat-text: #e4e6e0;
+  --benchmark: #4a4e46;
+  --primary-bg: #f2f3ef;
+  --primary-text: #0c0d0c;
+  --area-alpha: 0.22;
+  --card-shadow: 0 10px 34px rgba(0, 0, 0, 0.4);
+  --spinner-track: #2a2c27;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Schibsted Grotesk', Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+  padding: 0;
+}
+
+textarea,
+input {
+  font-family: inherit;
+}
+
+/* Tabular figures for all money/percent/date/time. */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Animation primitives (from the design) ---- */
+@keyframes hs-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+@keyframes hs-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes hs-shimmer {
+  0% {
+    background-position: -450px 0;
+  }
+  100% {
+    background-position: 450px 0;
+  }
+}
+@keyframes hs-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.hs-pulse {
+  animation: hs-pulse 1.6s ease-in-out infinite;
+}
+.hs-spin {
+  animation: hs-spin 0.9s linear infinite;
+}
+.hs-fade-in {
+  animation: hs-fade-in 180ms ease both;
+}
+
+/* Subtle loading shimmer for the chart while a re-run is in flight. */
+.hs-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.hs-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(127, 127, 127, 0.08),
+    transparent
+  );
+  background-size: 450px 100%;
+  background-repeat: no-repeat;
+  animation: hs-shimmer 1.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hs-pulse,
+  .hs-spin,
+  .hs-fade-in,
+  .hs-shimmer::after {
+    animation: none;
+  }
+}
+
+/* Quiet scrollbars in the chat column. */
+.hs-scroll {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--hairline) transparent;
+}
+.hs-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.hs-scroll::-webkit-scrollbar-thumb {
+  background: var(--hairline);
+  border-radius: 999px;
+}
+
+/* Scrolls, but with no visible scrollbar at all (the strategy list, where the
+   rows already read as a continuous column and a track would cut into them). */
+.hs-scroll-hidden {
+  overflow-y: auto;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* legacy Edge */
+}
+.hs-scroll-hidden::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
