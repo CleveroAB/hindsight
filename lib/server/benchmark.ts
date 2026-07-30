@@ -40,8 +40,12 @@ const NOT_TICKERS = new Set([
   'MIN', 'AVG', 'STD', 'API', 'CSV', 'JSON', 'UTC', 'AM', 'PM', 'BPS',
 ]);
 
-/** Yahoo-compatible symbol: letters/digits plus the `.`, `-`, `^` separators. */
-const SYMBOL_RE = /^[A-Z0-9][A-Z0-9.^-]{0,9}$/;
+/**
+ * Yahoo-compatible symbol: letters/digits plus the `.`, `-`, `^` separators.
+ * `^` is admitted in FIRST position too — every Yahoo index symbol leads with
+ * one (`^GSPC`, `^VIX`), so excluding it there made index tickers unfetchable.
+ */
+const SYMBOL_RE = /^[A-Z0-9^][A-Z0-9.^-]{0,9}$/;
 
 /** True for a client-supplied `?ticker=` value we're willing to fetch. */
 export function isValidTicker(ticker: string): boolean {
