@@ -116,6 +116,35 @@ Copy `.env.example` → `.env` and adjust:
 | `HINDSIGHT_CODEX_HOME` | `~/.codex` | Codex auth mounted (read-only) into the container |
 | `HINDSIGHT_CODEX_MODEL` | `gpt-5.6-sol` | model passed to `codex exec -m` |
 | `HINDSIGHT_DATA_DIR` | `./data` | session store + per-session workdirs |
+| `HINDSIGHT_AUTH_USER` | *(unset)* | username for Basic auth — see [Hosting it on a domain](#hosting-it-on-a-domain) |
+| `HINDSIGHT_AUTH_PASSWORD` | *(unset)* | password for Basic auth; **both** must be set for auth to switch on |
+
+## Hosting it on a domain
+
+Hindsight is built to run locally, and out of the box it has no authentication — anyone
+who can reach it can spend your Codex credits. If you want it on a public domain anyway,
+set **both** auth vars:
+
+```bash
+HINDSIGHT_AUTH_USER=you
+HINDSIGHT_AUTH_PASSWORD="$(openssl rand -base64 24)"
+```
+
+That flips [`proxy.ts`](proxy.ts) out of its local "tunnel gate" mode into **lockdown
+mode**: every path — the app, the whole API, `/_next` assets — returns `401` until the
+browser presents those credentials. The one exception is `/share/<token>`, which stays
+public, so share links keep working for whoever you send them to.
+
+Both vars must be non-empty; setting only one leaves auth **off**, so a half-finished
+config can't silently open the door. Serve it over HTTPS (behind Caddy, nginx, or a
+Cloudflare tunnel) — Basic credentials go out on every request.
+
+One shared password is the floor, not the ceiling. For per-person identity, SSO, and no
+publicly-reachable port at all, put **Cloudflare Access** (free up to 50 users) or
+Tailscale in front; the Basic auth here composes fine underneath either.
+
+> Auth stops strangers; it does **not** cap spend. Runs are tracked per session, so N
+> sessions means N concurrent `codex exec` containers, and runs have no wall-clock cap.
 
 ## Project layout
 
@@ -128,7 +157,7 @@ lib/client/           Client data layer: fetch helpers + SSE / session / theme h
 lib/server/           Session store, run manager, and the agent layer
   agent/               mock runner, codex-in-Docker runner, prompt builder, mock curve
 docker/               Image + AGENTS.md + entrypoint for real Codex runs
-proxy.ts              Tunnel gate: share links expose ONE read-only page, nothing else
+proxy.ts              Front door: tunnel gate locally, Basic auth when hosted
 scripts/seed.mjs      Seeds the three example strategies
 PROTOCOL.md           The binding API / SSE / agent-file contract
 ```
@@ -145,8 +174,10 @@ PROTOCOL.md           The binding API / SSE / agent-file contract
 
 ## Notes & limits (v1)
 
-- Single-user, local, no auth — **don't expose it to the internet** (see
-  [SECURITY.md](SECURITY.md)). State lives on your machine under `./data/`.
+- Single-user and local by default, with no auth — **don't expose it to the internet
+  without setting `HINDSIGHT_AUTH_USER` / `HINDSIGHT_AUTH_PASSWORD`** (see
+  [Hosting it on a domain](#hosting-it-on-a-domain) and [SECURITY.md](SECURITY.md)).
+  State lives on your machine under `./data/`.
 - Runs have no hard time cap — press `esc` to interrupt (kills the container in Codex mode).
 - The mock's equity curves are procedurally generated placeholders; real Codex output
   replaces them with genuine backtests.
