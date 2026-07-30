@@ -130,6 +130,7 @@ lib/server/           Session store, run manager, and the agent layer
 docker/               Image + AGENTS.md + entrypoint for real Codex runs
 proxy.ts              Tunnel gate: share links expose ONE read-only page, nothing else
 scripts/seed.mjs      Seeds the three example strategies
+tests/                bun test specs, one file per module (+ shared fixtures)
 PROTOCOL.md           The binding API / SSE / agent-file contract
 ```
 
@@ -140,8 +141,19 @@ PROTOCOL.md           The binding API / SSE / agent-file contract
 | `bun run dev` | Dev server |
 | `bun run build` / `bun run start` | Production build + serve |
 | `bun run typecheck` | `tsc --noEmit` |
+| `bun run lint` | ESLint |
+| `bun run test` | `bun test` — the suite in `tests/` |
 | `bun run seed` | Load the three example strategies |
 | `bun run docker:build` | Build the agent container image |
+
+## Tests
+
+`bun test`. Bun's runner is built in, so the suite adds no dependencies; it runs
+in ~15s and needs neither Docker nor network access. Coverage is concentrated on
+the parts of the app that are contracts rather than pixels: the `proxy.ts` tunnel
+gate, the `events.ndjson` / `result.json` agent protocol (PROTOCOL.md §3/§4),
+image-upload validation, the session store, and the shared chart/format math. See
+[CONTRIBUTING.md](CONTRIBUTING.md#tests) for what is not covered yet.
 
 ## Notes & limits (v1)
 

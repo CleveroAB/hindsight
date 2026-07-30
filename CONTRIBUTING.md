@@ -19,11 +19,39 @@ the real agent path needs Docker + a Codex CLI login (see the README).
 ```bash
 bun run typecheck
 bun run lint
+bun run test
 bun run build
 ```
 
-All three must pass. There is no test suite yet — if you're adding one, that's
-a very welcome PR.
+All four must pass. There is no CI — running them locally is the check.
+
+## Tests
+
+`bun test` — Bun's runner is built in, so there are no extra dependencies. Specs
+live in `tests/`, one file per module, and take ~15s end to end; most of that is
+`mockRunner.test.ts`, which drives a real mock run rather than faking timers.
+
+```bash
+bun test                      # everything
+bun test tests/proxy.test.ts  # one file
+bun test --watch              # while working
+```
+
+Two areas are worth extra care when you touch them:
+
+- **`tests/proxy.test.ts`** — the tunnel gate. This is the only thing keeping a
+  share link from exposing the whole app and API (see [SECURITY.md](SECURITY.md)).
+  Add a case for every new path or header you teach it about.
+- **`tests/agentEvents.test.ts` and `tests/resultNormalize.test.ts`** — the
+  agent-output contract, PROTOCOL.md §3/§4. The agent is an LLM writing to a
+  file, so a parser change wants a malformed-input case next to the happy path.
+
+Tests that touch disk must call `withTempDataDir()` from `tests/helpers.ts`,
+which points `HINDSIGHT_DATA_DIR` at a throwaway directory — never write to the
+real `./data`.
+
+Not covered yet, and welcome: the API route handlers, the run manager's
+lifecycle and SSE fan-out, and the React components.
 
 ## Ground rules
 
