@@ -2,10 +2,21 @@
 // Outbound signal messages. Default provider sends real iMessages through the
 // macOS Messages app via `osascript` (argv passing — the phone and text are
 // NEVER interpolated into the AppleScript source). Pluggable via env:
-//   HINDSIGHT_SIGNAL_PROVIDER = imessage (default) | poke | webhook
+//   HINDSIGHT_SIGNAL_PROVIDER = imessage (default) | signal | poke | webhook
+//   signal  — POST to a signal-cli-rest-api service (self-hosted, shared
+//             across projects) at HINDSIGHT_SIGNAL_CLI_URL: the message
+//             arrives on Signal FROM a dedicated bot number
+//             (HINDSIGHT_SIGNAL_SENDER), so it lands as a real conversation
+//             with notifications. Optional HINDSIGHT_SIGNAL_CLI_AUTH is sent
+//             as the Authorization header for proxied deployments. Run the
+//             service in json-rpc mode so receiving is continuous; see
+//             PROTOCOL.md §8 for setup.
 //   poke    — POST to Poke.com's inbound webhook with HINDSIGHT_POKE_API_KEY
 //   webhook — POST { phone, message } to HINDSIGHT_SIGNAL_WEBHOOK_URL (covers
 //             OpenClaw/Hermes-style iMessage bridges)
+// Caveat on `imessage`: macOS sends as the signed-in Apple ID, so messages to
+// your OWN number land in the self-thread WITHOUT notifications (and macOS 26
+// broke the AppleScript send verb outright). Prefer `signal`.
 // The compose* helpers are pure and unit-testable; keep the copy short.
 // ============================================================================
 
@@ -55,6 +66,43 @@ async function sendViaPoke(text: string): Promise<void> {
   if (!res.ok) throw new Error(`Poke webhook refused the message (HTTP ${res.status}).`);
 }
 
+// Signal delivery is a network round-trip through signal-cli's JVM on a
+// remote host — first sends after a quiet period can take well over 10s.
+const SIGNAL_TIMEOUT_MS = 30_000;
+
+async function sendViaSignal(phone: string, text: string): Promise<void> {
+  const base = process.env.HINDSIGHT_SIGNAL_CLI_URL?.trim().replace(/\/+$/, '');
+  if (!base) throw new Error('HINDSIGHT_SIGNAL_PROVIDER=signal requires HINDSIGHT_SIGNAL_CLI_URL.');
+  const sender = normalizePhone(process.env.HINDSIGHT_SIGNAL_SENDER);
+  if (!sender) {
+    throw new Error(
+      'HINDSIGHT_SIGNAL_PROVIDER=signal requires HINDSIGHT_SIGNAL_SENDER (the bot number, E.164).',
+    );
+  }
+  const auth = process.env.HINDSIGHT_SIGNAL_CLI_AUTH?.trim();
+  const res = await fetch(`${base}/v2/send`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(auth ? { Authorization: auth } : {}),
+    },
+    body: JSON.stringify({ number: sender, recipients: [phone], message: text }),
+    signal: AbortSignal.timeout(SIGNAL_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    // signal-cli-rest-api returns { error: "..." } bodies; surface the useful
+    // part but never dump a whole HTML error page into session state.
+    let detail = '';
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (typeof body.error === 'string') detail = ` — ${body.error.slice(0, 160)}`;
+    } catch {
+      /* non-JSON body; the status alone will have to do */
+    }
+    throw new Error(`Signal send failed (HTTP ${res.status})${detail}`);
+  }
+}
+
 async function sendViaWebhook(phone: string, text: string): Promise<void> {
   const url = process.env.HINDSIGHT_SIGNAL_WEBHOOK_URL?.trim();
   if (!url) throw new Error('HINDSIGHT_SIGNAL_PROVIDER=webhook requires HINDSIGHT_SIGNAL_WEBHOOK_URL.');
@@ -74,14 +122,17 @@ export function normalizePhone(raw: string | null | undefined): string | null {
 }
 
 /** The outbound provider after env normalization — anything unknown means imessage. */
-export function signalProvider(): 'imessage' | 'poke' | 'webhook' {
+export function signalProvider(): 'imessage' | 'signal' | 'poke' | 'webhook' {
   const provider = process.env.HINDSIGHT_SIGNAL_PROVIDER?.trim().toLowerCase();
-  return provider === 'poke' || provider === 'webhook' ? provider : 'imessage';
+  return provider === 'signal' || provider === 'poke' || provider === 'webhook'
+    ? provider
+    : 'imessage';
 }
 
 /** Deliver one message to `phone` via the configured provider. Throws on failure. */
 export async function sendSignalMessage(phone: string, text: string): Promise<void> {
   const provider = signalProvider();
+  if (provider === 'signal') return sendViaSignal(phone, text);
   if (provider === 'poke') return sendViaPoke(text);
   if (provider === 'webhook') return sendViaWebhook(phone, text);
   return sendViaIMessage(phone, text);

@@ -432,7 +432,7 @@ export interface ActiveSignalEntry {
 export interface SignalsOverview {
   /** HINDSIGHT_SIGNAL_PHONE when set and valid E.164, else null. Prefills the UI. */
   defaultPhone: string | null;
-  /** The configured outbound provider: `imessage` (default), `poke`, or `webhook`. */
+  /** The configured outbound provider: `imessage` (default), `signal`, `poke`, or `webhook`. */
   provider: string;
   active: ActiveSignalEntry[];
 }

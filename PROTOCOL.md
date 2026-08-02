@@ -402,8 +402,17 @@ hydrated defensively on read like `backtests`.
    failing (the null→error transition); scheduled HOLDs and no-new-bar checks
    are silent. Activation and deactivation always send a confirmation.
    Delivery (`HINDSIGHT_SIGNAL_PROVIDER`): `imessage` (default — Messages.app
-   via `osascript` on the macOS host), `poke` (Poke.com inbound webhook with
-   `HINDSIGHT_POKE_API_KEY`), or `webhook` (`{ phone, message }` POSTed to
-   `HINDSIGHT_SIGNAL_WEBHOOK_URL`). Every message that goes out is also
-   appended to the session chat as a `system` message. The share page never
-   exposes `activation` — it carries the phone number.
+   via `osascript` on the macOS host; note it sends **as the signed-in Apple
+   ID**, so messages to your own number land in the self-thread without
+   notifications), `signal` (recommended — a self-hosted
+   [signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api)
+   service, shareable across projects: Hindsight POSTs
+   `{ number, recipients, message }` to `HINDSIGHT_SIGNAL_CLI_URL` `/v2/send`,
+   sending from the dedicated bot number `HINDSIGHT_SIGNAL_SENDER`, with
+   `HINDSIGHT_SIGNAL_CLI_AUTH` forwarded as the `Authorization` header when
+   set; run the service in `json-rpc` mode so it receives continuously —
+   register the bot number once on that host), `poke` (Poke.com inbound
+   webhook with `HINDSIGHT_POKE_API_KEY`), or `webhook` (`{ phone, message }`
+   POSTed to `HINDSIGHT_SIGNAL_WEBHOOK_URL`). Every message that goes out is
+   also appended to the session chat as a `system` message. The share page
+   never exposes `activation` — it carries the phone number.

@@ -116,10 +116,12 @@ Browser (React)  ──HTTP──▶  Next.js API routes  ──▶  Run manager
 - **Activation.** Activate a finished strategy and it becomes a live signal feed: its
   saved code is re-executed on a schedule derived from the strategy itself (asset class +
   rebalance frequency — no LLM involved), and when the target positions change on the
-  latest bar you get an iMessage with the BUY/SELL deltas. Delivery defaults to Apple
-  Messages via `osascript` (`HINDSIGHT_SIGNAL_PHONE` sets the default number); a Poke.com
-  key or a generic webhook bridge plugs in via `HINDSIGHT_SIGNAL_PROVIDER` (see
-  `.env.example`). Still simulation output — nothing is traded.
+  latest bar you get a text with the BUY/SELL deltas. Delivery is pluggable via
+  `HINDSIGHT_SIGNAL_PROVIDER` (see `.env.example`): a self-hosted Signal bot
+  (`signal`, recommended — messages arrive as a real conversation from a dedicated
+  number), Apple Messages via `osascript` (`imessage`, default), a Poke.com key, or a
+  generic webhook bridge. `HINDSIGHT_SIGNAL_PHONE` sets the default recipient. Still
+  simulation output — nothing is traded.
 
 ## Configuration
 
