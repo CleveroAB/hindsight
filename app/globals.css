@@ -174,11 +174,11 @@ input {
   }
 }
 @keyframes hs-shimmer {
-  0% {
-    background-position: -450px 0;
-  }
-  100% {
-    background-position: 450px 0;
+  to {
+    /* Band is 40% wide and starts fully off the left edge; 350% of its own
+       width carries its trailing edge exactly past the right edge at any
+       container size. */
+    transform: translateX(350%);
   }
 }
 @keyframes hs-fade-in {
@@ -208,15 +208,16 @@ input {
 .hs-shimmer::after {
   content: '';
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: 0;
+  left: -40%;
+  width: 40%;
   background: linear-gradient(
     90deg,
     transparent,
     rgba(127, 127, 127, 0.08),
     transparent
   );
-  background-size: 450px 100%;
-  background-repeat: no-repeat;
   animation: hs-shimmer 1.4s ease-in-out infinite;
   pointer-events: none;
 }

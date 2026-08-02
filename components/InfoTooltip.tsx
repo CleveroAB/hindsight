@@ -1,24 +1,28 @@
 'use client';
 
 // The ⓘ outline icon next to the change line. Hover (or keyboard focus) shows
-// a small on-theme tooltip breaking down start value → end value.
+// a small on-theme tooltip breaking down start value → end value, plus the
+// annualized return when the period is long enough to support one.
 
 import { useState } from 'react';
-import { formatMoney, formatMoneyWhole } from '@/lib/format';
+import { formatMoney, formatMoneyWhole, formatSignedPercent } from '@/lib/format';
 
 export interface InfoTooltipProps {
   start: number;
   final: number;
+  /** Annualized return in percent; null/absent hides the CAGR piece. */
+  cagrPct?: number | null;
 }
 
-export default function InfoTooltip({ start, final }: InfoTooltipProps) {
+export default function InfoTooltip({ start, final, cagrPct = null }: InfoTooltipProps) {
   const [open, setOpen] = useState(false);
-  const text = `${formatMoneyWhole(start)} → ${formatMoney(final)}`;
+  const journey = `${formatMoneyWhole(start)} → ${formatMoney(final)}`;
+  const cagr = cagrPct == null ? null : `${formatSignedPercent(cagrPct)} CAGR`;
 
   return (
     <span
       tabIndex={0}
-      aria-label={text}
+      aria-label={cagr ? `${journey}, ${cagr}` : journey}
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
       onFocus={() => setOpen(true)}
@@ -47,16 +51,18 @@ export default function InfoTooltip({ start, final }: InfoTooltipProps) {
             whiteSpace: 'nowrap',
             background: 'var(--surface)',
             border: '1px solid var(--border-input)',
-            borderRadius: 'var(--r-pill)',
+            borderRadius: cagr ? 'var(--r-card)' : 'var(--r-pill)',
             boxShadow: 'var(--card-shadow)',
             padding: '7px 12px',
             fontSize: 12,
+            lineHeight: 1.6,
             color: 'var(--text)',
             zIndex: 10,
             pointerEvents: 'none',
           }}
         >
-          {text}
+          <span style={{ display: 'block' }}>{journey}</span>
+          {cagr && <span style={{ display: 'block', color: 'var(--muted)' }}>{cagr}</span>}
         </span>
       )}
     </span>

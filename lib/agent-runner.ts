@@ -7,7 +7,7 @@
 // See PROTOCOL.md §2. Shared file — no server-only imports.
 // ============================================================================
 
-import type { Attachment, ProgressEvent, Session, StrategyResult } from './types';
+import type { Attachment, CodexEffort, ProgressEvent, Session, StrategyResult } from './types';
 
 export type RunKind = 'initial' | 'refine' | 'rerun' | 'refresh';
 
@@ -24,6 +24,10 @@ export interface RunInput {
    * images should attach them to the model call; the mock ignores them.
    */
   attachments?: Attachment[];
+  /** Exact model snapshot for an LLM-backed run; ignored by mock/rerun paths. */
+  model?: string;
+  /** Exact reasoning-effort snapshot paired with model. */
+  effort?: CodexEffort;
   /** Runner emits parsed progress here as it works. */
   onEvent: (event: ProgressEvent) => void;
   /** Abort signal; when aborted, the runner must hard-kill its work. */

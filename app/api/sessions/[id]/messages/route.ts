@@ -8,6 +8,7 @@
 
 import { NextResponse } from 'next/server';
 import type { Attachment, RefineBody } from '@/lib/types';
+import { extractBacktestIds, findBacktest } from '@/lib/backtests';
 import { getSession } from '@/lib/server/store';
 import { isValidSessionId } from '@/lib/server/paths';
 import { runManager } from '@/lib/server/runManager';
@@ -57,6 +58,25 @@ export async function POST(request: Request, { params: paramsPromise }: { params
   const existing = await getSession(params.id);
   if (!existing) {
     return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+  }
+
+  const backtestIds = extractBacktestIds(text);
+  for (const backtestId of backtestIds) {
+    const version = findBacktest(existing, backtestId);
+    if (!version) {
+      return NextResponse.json(
+        { error: `Backtest ${backtestId} was not found in this strategy.` },
+        { status: 400 },
+      );
+    }
+  }
+  const primaryId = backtestIds[0];
+  const primary = primaryId ? findBacktest(existing, primaryId) : undefined;
+  if (primary && !primary.result.code) {
+    return NextResponse.json(
+      { error: `Backtest ${primary.id} cannot be restored because its strategy code is unavailable.` },
+      { status: 409 },
+    );
   }
 
   // Store attachments only once the session is known to exist — otherwise a

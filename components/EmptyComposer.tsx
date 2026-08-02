@@ -121,12 +121,13 @@ export default function EmptyComposer({
           rows={2}
           disabled={blocked}
           aria-disabled={blocked}
+          title="Enter to run · Shift+Enter for a new line"
           onChange={(e) => {
             setValue(e.target.value);
             resize();
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               submit();
             }
@@ -161,7 +162,9 @@ export default function EmptyComposer({
           {blocked ? (
             <div style={{ fontSize: 12, color: 'var(--red)', lineHeight: 1.5 }}>{blockedReason}</div>
           ) : (
-            <div style={{ fontSize: 12, color: 'var(--faint)' }}>⏎ to run</div>
+            <div style={{ fontSize: 12, color: 'var(--faint)' }}>
+              Enter to run · Shift+Enter for a new line
+            </div>
           )}
           <button
             type="button"
