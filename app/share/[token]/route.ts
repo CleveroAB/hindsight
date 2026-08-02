@@ -21,5 +21,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tok
   if (!session) {
     return new Response(renderShareNotFound(), { status: 404, headers: HTML_HEADERS });
   }
+  // The public page must never carry activation state — it holds the user's
+  // phone number. The renderer only reads whitelisted fields today; stripping
+  // here keeps that guaranteed even if it grows.
+  delete session.activation;
   return new Response(renderSharePage(session), { status: 200, headers: HTML_HEADERS });
 }

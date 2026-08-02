@@ -90,9 +90,87 @@ export function resultFile(id: string): string {
   return path.join(workDir(id), 'result.json');
 }
 
+/** `${data}/work/<id>/baseline` — accepted state saved before an LLM refinement. */
+export function baselineDir(id: string): string {
+  return path.join(workDir(id), 'baseline');
+}
+
+/** Accepted strategy backup available to the refining agent. */
+export function baselineStrategyFile(id: string): string {
+  return path.join(baselineDir(id), 'strategy.py');
+}
+
+/** Accepted result backup available to the refining agent. */
+export function baselineResultFile(id: string): string {
+  return path.join(baselineDir(id), 'result.json');
+}
+
+/** `${data}/work/<id>/versions` — materialized snapshots referenced by chat ids. */
+export function backtestVersionsDir(id: string): string {
+  return path.join(workDir(id), 'versions');
+}
+
+/** A generated `BT-001` style id is safe as one path segment. */
+export function isValidBacktestId(backtestId: string): boolean {
+  return /^BT-\d{3,6}$/.test(backtestId);
+}
+
+/** Host directory mounted at `/work/versions/<backtestId>` for the agent. */
+export function backtestVersionDir(id: string, backtestId: string): string {
+  if (!isValidBacktestId(backtestId)) throw new Error(`Invalid backtest id: ${backtestId}`);
+  return path.join(backtestVersionsDir(id), backtestId);
+}
+
+export function backtestVersionStrategyFile(id: string, backtestId: string): string {
+  return path.join(backtestVersionDir(id, backtestId), 'strategy.py');
+}
+
+export function backtestVersionResultFile(id: string, backtestId: string): string {
+  return path.join(backtestVersionDir(id, backtestId), 'result.json');
+}
+
 /** `${data}/work/<id>/agent.log`. */
 export function agentLogFile(id: string): string {
   return path.join(workDir(id), 'agent.log');
+}
+
+/** `${data}/signals` — scratch workdirs for activation signal checks. */
+export function signalsDir(): string {
+  return path.join(dataDir(), 'signals');
+}
+
+/**
+ * `${data}/signals/<id>` — scratch workdir for one session's signal checks.
+ * Mirrors the layout of `work/<id>` so `HS_KIND=rerun` containers run
+ * unchanged, but is fully disposable: the real workdir is never touched.
+ */
+export function signalWorkDir(id: string): string {
+  return path.join(signalsDir(), id);
+}
+
+/** `${data}/signals/<id>/data` — emptied on every check (always-fresh bars). */
+export function signalDataDir(id: string): string {
+  return path.join(signalWorkDir(id), 'data');
+}
+
+/** `${data}/signals/<id>/params.json`. */
+export function signalParamsFile(id: string): string {
+  return path.join(signalWorkDir(id), 'params.json');
+}
+
+/** `${data}/signals/<id>/strategy.py`. */
+export function signalStrategyFile(id: string): string {
+  return path.join(signalWorkDir(id), 'strategy.py');
+}
+
+/** `${data}/signals/<id>/events.ndjson`. */
+export function signalEventsFile(id: string): string {
+  return path.join(signalWorkDir(id), 'events.ndjson');
+}
+
+/** `${data}/signals/<id>/result.json`. */
+export function signalResultFile(id: string): string {
+  return path.join(signalWorkDir(id), 'result.json');
 }
 
 /** Recursively create a directory (no-op if it already exists). */

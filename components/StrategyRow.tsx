@@ -37,6 +37,9 @@ export default function StrategyRow({ session, onDeleted }: StrategyRowProps) {
 
   const running = session.status === 'running' && session.result === null;
   const result = session.result;
+  // Activated strategies get a live dot beside the name — but not while the
+  // first run is still going, where the same dot already means "Tinkering…".
+  const activation = running ? null : session.activation ?? null;
 
   // The window is shown as a year axis under the sparkline, so the description
   // no longer repeats it.
@@ -94,17 +97,32 @@ export default function StrategyRow({ session, onDeleted }: StrategyRowProps) {
         }}
       >
         <div style={{ minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: 15,
-              fontWeight: 600,
-              color: 'var(--text)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {session.name || 'Untitled strategy'}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: 15,
+                fontWeight: 600,
+                color: 'var(--text)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {session.name || 'Untitled strategy'}
+            </div>
+            {activation && (
+              <div
+                className="hs-pulse"
+                title={activation.cadenceReason}
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: 'var(--green-stroke)',
+                  flex: 'none',
+                }}
+              />
+            )}
           </div>
           {session.description && (
             <div

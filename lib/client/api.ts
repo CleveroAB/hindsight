@@ -5,6 +5,7 @@
 // ============================================================================
 
 import type {
+  ActivateBody,
   AgentHealth,
   AppSettings,
   BenchmarkResponse,
@@ -13,6 +14,8 @@ import type {
   RerunBody,
   Session,
   ShareInfo,
+  SignalCheckResponse,
+  SignalsOverview,
   UpdateSettingsBody,
 } from '@/lib/types';
 
@@ -106,10 +109,16 @@ export function rerun(id: string, body: RerunBody): Promise<Session> {
   });
 }
 
-/** GET /api/sessions/[id]/benchmark — buy-and-hold curve for a comparable equity. */
-export function getBenchmark(id: string, ticker?: string): Promise<BenchmarkResponse> {
-  const query = ticker ? `?ticker=${encodeURIComponent(ticker)}` : '';
-  return request<BenchmarkResponse>(`/api/sessions/${encodeURIComponent(id)}/benchmark${query}`);
+/** GET /api/sessions/[id]/benchmark — validated curve for one strategy version. */
+export function getBenchmark(
+  id: string,
+  options: { ticker?: string; backtestId?: string } = {},
+): Promise<BenchmarkResponse> {
+  const query = new URLSearchParams();
+  if (options.ticker) query.set('ticker', options.ticker);
+  if (options.backtestId) query.set('backtestId', options.backtestId);
+  const suffix = query.size ? `?${query.toString()}` : '';
+  return request<BenchmarkResponse>(`/api/sessions/${encodeURIComponent(id)}/benchmark${suffix}`);
 }
 
 /** POST /api/sessions/[id]/interrupt — hard-kill the active run. */
@@ -134,6 +143,34 @@ export function unshareSession(id: string): Promise<{ ok: true }> {
   return request<{ ok: true }>(`/api/sessions/${encodeURIComponent(id)}/share`, {
     method: 'DELETE',
   });
+}
+
+/** POST /api/sessions/[id]/activate — start scheduled signal checks. */
+export function activateSession(id: string, phone?: string): Promise<Session> {
+  const body: ActivateBody = phone ? { phone } : {};
+  return request<Session>(`/api/sessions/${encodeURIComponent(id)}/activate`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+/** DELETE /api/sessions/[id]/activate — stop scheduled signal checks. */
+export function deactivateSession(id: string): Promise<Session> {
+  return request<Session>(`/api/sessions/${encodeURIComponent(id)}/activate`, {
+    method: 'DELETE',
+  });
+}
+
+/** POST /api/sessions/[id]/activate/check — run one signal check right now. */
+export function runSignalCheck(id: string): Promise<SignalCheckResponse> {
+  return request<SignalCheckResponse>(`/api/sessions/${encodeURIComponent(id)}/activate/check`, {
+    method: 'POST',
+  });
+}
+
+/** GET /api/signals — activation defaults + every activated strategy. */
+export function getSignalsOverview(): Promise<SignalsOverview> {
+  return request<SignalsOverview>('/api/signals');
 }
 
 /** GET /api/settings — model + effort used for LLM-backed runs. */

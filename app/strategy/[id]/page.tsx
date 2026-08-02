@@ -9,7 +9,13 @@
 // refetched; run errors surface as agent chat messages appended by the backend.
 
 import { use, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChatMessage, Period, StatusWord, StepEvent } from '@/lib/types';
+import type {
+  AgentResponseMetadata,
+  ChatMessage,
+  Period,
+  StatusWord,
+  StepEvent,
+} from '@/lib/types';
 import { interrupt, refine, rerun } from '@/lib/client/api';
 import { useSession } from '@/lib/client/useSession';
 import { useSSE } from '@/lib/client/useSSE';
@@ -28,12 +34,17 @@ export default function StrategyPage({ params }: { params: Promise<{ id: string 
   const [runActive, setRunActive] = useState(false);
   const liveIdRef = useRef(0);
 
-  const appendLive = (role: 'agent' | 'system', text: string) => {
+  const appendLive = (
+    role: 'agent' | 'system',
+    text: string,
+    metadata?: AgentResponseMetadata,
+  ) => {
     liveIdRef.current += 1;
     const message: ChatMessage = {
       id: `live-${liveIdRef.current}`,
       role,
       text,
+      ...(metadata ? { metadata } : {}),
       createdAt: Date.now(),
     };
     setLiveMessages((prev) => [...prev, message]);
@@ -73,7 +84,7 @@ export default function StrategyPage({ params }: { params: Promise<{ id: string 
       });
     },
     onMeta: (e) => applyMeta(e.name, e.description),
-    onMessage: (e) => appendLive(e.role, e.text),
+    onMessage: (e) => appendLive(e.role, e.text, e.metadata),
     onResult: () => {
       void refetch();
     },
@@ -228,6 +239,7 @@ export default function StrategyPage({ params }: { params: Promise<{ id: string 
           onRefine={(text, images) => void handleRefine(text, images)}
           onRerun={(period) => void handleRerun(period)}
           onRefresh={() => void handleRefresh()}
+          onSessionChange={applySession}
         />
       )}
     </div>

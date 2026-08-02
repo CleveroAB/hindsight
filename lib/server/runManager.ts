@@ -17,16 +17,19 @@
 // Depends on the agent layer via exactly one import: `selectRunner`.
 // ============================================================================
 
-import { writeFile, readFile, rm, access } from 'node:fs/promises';
+import { writeFile, readFile, rm } from 'node:fs/promises';
 import { nanoid } from 'nanoid';
 import type { AgentRunner, RunHandle, RunKind } from '@/lib/agent-runner';
 import { STATUS_WORDS } from '@/lib/agent-runner';
 import type {
+  AgentResponseMetadata,
   Attachment,
+  BacktestVersion,
   ChatMessage,
   EquityPoint,
   MetaEvent,
   MessageEvent as ChatMessageEvent,
+  PositionsPoint,
   ProgressEvent,
   RunSnapshot,
   Session,
@@ -34,12 +37,27 @@ import type {
   StepEvent,
   StrategyResult,
 } from '@/lib/types';
-import { formatDuration } from '@/lib/format';
+import {
+  extractBacktestIds,
+  latestBacktest,
+  nextBacktestId,
+  referencedBacktests,
+  snapshotBacktest,
+} from '@/lib/backtests';
 import { selectRunner } from '@/lib/server/agent';
+import { selectBenchmark } from '@/lib/server/benchmark';
+import { getSettingsSync } from '@/lib/server/settings';
 import * as store from '@/lib/server/store';
 import {
+  backtestVersionDir,
+  backtestVersionResultFile,
+  backtestVersionStrategyFile,
+  baselineDir,
+  baselineResultFile,
+  baselineStrategyFile,
   ensureDir,
   paramsFile,
+  resultFile,
   strategyFile,
   workDataDir,
   workDir,
@@ -51,6 +69,8 @@ const HEARTBEAT_MS = 10_000;
 const STALE_MS = 45_000;
 /** How often to sweep for abandoned runs. */
 const SWEEP_MS = 30_000;
+/** Cap on the optional positions series — the most recent bars win (PROTOCOL §4). */
+const MAX_POSITIONS_POINTS = 750;
 
 /** A single SSE frame: an `event:` name + a JSON-serialisable `data` payload. */
 export interface SseFrame {
@@ -84,6 +104,12 @@ interface ActiveRun {
   statusWord: StatusWord;
   /** Skeleton keys of chat messages already posted by THIS run (dedupe). */
   messageKeys: Set<string>;
+  /** Latest agent summary; held until success so trial runs cannot become the displayed answer. */
+  pendingAgentMessage: ChatMessageEvent | null;
+  /** Model settings captured at run start; null for mock and saved-code runs. */
+  responseUsage: Omit<AgentResponseMetadata, 'durationMs'>;
+  /** Version whose strategy/result seeded this run. */
+  basedOnBacktestId: string | null;
   /** Last time this run's liveness heartbeat was persisted. */
   lastHeartbeatAt: number;
   runStartedAt: number;
@@ -98,15 +124,6 @@ interface ActiveRun {
 interface SessionRuntime {
   subscribers: Set<(frame: SseFrame) => void>;
   active: ActiveRun | null;
-}
-
-async function fileExists(p: string): Promise<boolean> {
-  try {
-    await access(p);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -124,6 +141,101 @@ async function strategyCanProduceResult(sessionId: string): Promise<boolean> {
   } catch {
     return false; // no strategy.py at all
   }
+}
+
+/** File-protocol shape of the last result the UI accepted for this session. */
+function acceptedResultJson(session: Session): string | null {
+  const result = session.result;
+  if (!result) return null;
+  return `${JSON.stringify(
+    {
+      name: session.name,
+      description: session.description,
+      startingCapital: result.startingCapital,
+      finalValue: result.finalValue,
+      returnPct: result.returnPct,
+      equityCurve: result.equityCurve.map((point) => [point.date, point.value]),
+      // Optional; JSON.stringify drops the key entirely on legacy results.
+      positions: result.positions?.map((point) => [point.date, point.weights]),
+      benchmark: result.benchmark?.map((point) => [point.date, point.value]) ?? null,
+      benchmarkTicker: result.benchmarkTicker,
+      benchmarkReason: result.benchmarkReason,
+      benchmarkSource: result.benchmarkSource,
+      code: result.code,
+      period: session.period,
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+/** Present one immutable version through the existing accepted-state helpers. */
+function sessionAtBacktest(session: Session, version: BacktestVersion): Session {
+  return {
+    ...session,
+    name: version.name,
+    description: version.description,
+    period: { ...version.period },
+    startingCapital: version.startingCapital,
+    result: version.result,
+  };
+}
+
+/** Materialize every explicitly mentioned version where the container can read it. */
+async function prepareReferencedWorkStates(
+  sessionId: string,
+  session: Session,
+  versions: BacktestVersion[],
+): Promise<void> {
+  await Promise.all(
+    versions.map(async (version) => {
+      await ensureDir(backtestVersionDir(sessionId, version.id));
+      const versionSession = sessionAtBacktest(session, version);
+      const json = acceptedResultJson(versionSession);
+      if (!json) return;
+      const writes: Promise<void>[] = [
+        writeFile(backtestVersionResultFile(sessionId, version.id), json, 'utf8'),
+      ];
+      if (version.result.code) {
+        writes.push(
+          writeFile(
+            backtestVersionStrategyFile(sessionId, version.id),
+            version.result.code,
+            'utf8',
+          ),
+        );
+      }
+      await Promise.all(writes);
+    }),
+  );
+}
+
+/**
+ * Make the persisted UI result authoritative before reusing agent files.
+ * A failed/interrupted refinement may have partially replaced strategy.py or
+ * result.json; this prevents that unaccepted candidate leaking into the next
+ * request. Refinements also receive immutable baseline copies so an
+ * optimization attempt can compare candidates and restore the accepted result.
+ */
+async function prepareAcceptedWorkState(
+  sessionId: string,
+  session: Session,
+  saveBaseline: boolean,
+): Promise<void> {
+  const json = acceptedResultJson(session);
+  if (!json) return;
+
+  const code = session.result?.code;
+  const writes: Promise<void>[] = [writeFile(resultFile(sessionId), json, 'utf8')];
+  if (code) writes.push(writeFile(strategyFile(sessionId), code, 'utf8'));
+
+  if (saveBaseline) {
+    await ensureDir(baselineDir(sessionId));
+    writes.push(writeFile(baselineResultFile(sessionId), json, 'utf8'));
+    if (code) writes.push(writeFile(baselineStrategyFile(sessionId), code, 'utf8'));
+  }
+
+  await Promise.all(writes);
 }
 
 function logError(context: string, err: unknown): void {
@@ -167,11 +279,49 @@ function toPoints(curve: unknown): EquityPoint[] {
 }
 
 /**
+ * Normalise any positions shape (`PositionsPoint[]` or `[date, {TICK: w}][]`)
+ * to points. Malformed entries are dropped, weights coerced to finite numbers
+ * under trimmed uppercase tickers, dates deduped keeping the last entry, sorted
+ * ascending, capped to the most recent bars. Empty in = empty out (omitted).
+ */
+function toPositions(series: unknown): PositionsPoint[] {
+  if (!Array.isArray(series)) return [];
+  const byDate = new Map<string, Record<string, number>>();
+  for (const item of series) {
+    let date = '';
+    let rawWeights: unknown;
+    if (Array.isArray(item) && item.length >= 2) {
+      date = String(item[0]);
+      rawWeights = item[1];
+    } else if (item && typeof item === 'object' && 'date' in item && 'weights' in item) {
+      const o = item as { date: unknown; weights: unknown };
+      date = String(o.date);
+      rawWeights = o.weights;
+    }
+    if (!date || !rawWeights || typeof rawWeights !== 'object' || Array.isArray(rawWeights)) {
+      continue;
+    }
+    const weights: Record<string, number> = {};
+    for (const [ticker, value] of Object.entries(rawWeights as Record<string, unknown>)) {
+      const symbol = ticker.trim().toUpperCase();
+      const weight = Number(value);
+      if (symbol && Number.isFinite(weight)) weights[symbol] = weight;
+    }
+    byDate.set(date, weights); // last entry for a date wins
+  }
+  return [...byDate.entries()]
+    .map(([date, weights]) => ({ date, weights }))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+    .slice(-MAX_POSITIONS_POINTS);
+}
+
+/**
  * Validate + stamp a raw result from the runner into a canonical StrategyResult.
  * Recomputes finalValue/returnPct from the curve and stamps ranAt/durationMs.
  */
 function normalizeResult(raw: StrategyResult, session: Session, durationMs: number): StrategyResult {
   const curve = toPoints((raw as { equityCurve?: unknown })?.equityCurve);
+  const positions = toPositions((raw as { positions?: unknown })?.positions);
   const rawBench = (raw as { benchmark?: unknown })?.benchmark;
   const benchmark = rawBench == null ? null : toPoints(rawBench);
 
@@ -181,15 +331,32 @@ function normalizeResult(raw: StrategyResult, session: Session, durationMs: numb
     firstFinite(curve[curve.length - 1]?.value, raw?.finalValue, startingCapital) ?? startingCapital;
   const returnPct = startingCapital !== 0 ? (finalValue / startingCapital - 1) * 100 : 0;
 
-  return {
+  const candidate: StrategyResult = {
     equityCurve: curve,
+    ...(positions.length ? { positions } : {}),
     benchmark: benchmark && benchmark.length ? benchmark : null,
+    benchmarkTicker:
+      typeof raw?.benchmarkTicker === 'string' ? raw.benchmarkTicker.trim().toUpperCase() : undefined,
+    benchmarkReason:
+      typeof raw?.benchmarkReason === 'string' ? raw.benchmarkReason.trim() : undefined,
+    benchmarkSource: raw?.benchmarkSource,
     finalValue,
     startingCapital,
     returnPct,
     code: typeof raw?.code === 'string' ? raw.code : undefined,
     ranAt: Date.now(),
     durationMs,
+  };
+
+  // Every accepted result gets a freshly validated comparison. Agent choices
+  // are checked against the actual code universe; missing/invalid choices are
+  // re-derived from this result rather than inherited from an older response.
+  const selection = selectBenchmark({ ...session, result: candidate });
+  return {
+    ...candidate,
+    benchmarkTicker: selection.ticker,
+    benchmarkReason: selection.reason,
+    benchmarkSource: selection.source,
   };
 }
 
@@ -311,22 +478,27 @@ function createRunManager(): RunManager {
    * cent of rounding. Scoping to the run is what makes this safe: a later run
    * (a rerun over new dates) starts with an empty key set, so its genuinely new
    * summary still appends.
-   * Returns false when the message was suppressed as a duplicate.
+   * Returns null when the message was suppressed as a duplicate.
    */
-  function applyMessage(run: ActiveRun, e: ChatMessageEvent): boolean {
+  function applyMessage(
+    run: ActiveRun,
+    e: ChatMessageEvent,
+    persistNow = true,
+  ): ChatMessage | null {
     const key = messageKey(e.role, e.text);
-    if (run.messageKeys.has(key)) return false;
+    if (run.messageKeys.has(key)) return null;
     run.messageKeys.add(key);
 
     const msg: ChatMessage = {
       id: nanoid(),
       role: e.role,
       text: e.text,
+      ...(e.metadata ? { metadata: e.metadata } : {}),
       createdAt: Date.now(),
     };
     run.session.chat.push(msg);
-    persist(run.session);
-    return true;
+    if (persistNow) persist(run.session);
+    return msg;
   }
 
   /** Handle one ProgressEvent from the runner — bound to the specific run. */
@@ -349,6 +521,15 @@ function createRunManager(): RunManager {
         broadcast(run.sessionId, { event: 'meta', data: event });
         break;
       case 'message':
+        // strategy.py may run several candidate variants during a refinement.
+        // Keep replacing the pending agent summary and publish only the last
+        // one after result.json succeeds; otherwise the first (possibly worse)
+        // trial can be mistaken for the accepted result. System notes remain
+        // genuinely live (data gaps, fetch progress, etc.).
+        if (event.role === 'agent') {
+          run.pendingAgentMessage = event;
+          break;
+        }
         // Suppressed duplicates are not broadcast either, so the live view and
         // the persisted chat stay in agreement.
         if (applyMessage(run, event)) {
@@ -387,12 +568,32 @@ function createRunManager(): RunManager {
     run.session.result = result;
     run.session.status = 'done';
     run.session.dataSnapshotAt = Date.now();
-    run.session.chat.push({
-      id: nanoid(),
-      role: 'system',
-      text: `Backtest finished in ${formatDuration(result.durationMs)}`,
-      createdAt: Date.now(),
-    });
+    const backtestId = nextBacktestId(run.session);
+    const finalAgentMessage: ChatMessageEvent = {
+      ...(run.pendingAgentMessage ?? {
+        type: 'message',
+        role: 'agent',
+        text: 'Backtest completed.',
+      }),
+      metadata: {
+        durationMs: result.durationMs,
+        ...run.responseUsage,
+        backtestId,
+      },
+    };
+    // Agent-role events are buffered rather than applied during the run, so
+    // this append is unique. The generic fallback guarantees every successful
+    // version still has a response carrying its copyable id.
+    const appendedFinalMessage = applyMessage(run, finalAgentMessage, false);
+    run.session.backtests.push(
+      snapshotBacktest({
+        session: run.session,
+        id: backtestId,
+        result,
+        messageId: appendedFinalMessage?.id,
+        basedOn: run.basedOnBacktestId,
+      }),
+    );
 
     try {
       await store.saveSession(run.session);
@@ -400,6 +601,9 @@ function createRunManager(): RunManager {
       logError('persist result failed', err);
     }
 
+    if (appendedFinalMessage) {
+      broadcast(run.sessionId, { event: 'message', data: finalAgentMessage });
+    }
     broadcast(run.sessionId, { event: 'result', data: { type: 'result', result } });
     broadcast(run.sessionId, { event: 'done', data: { type: 'done' } });
   }
@@ -460,15 +664,34 @@ function createRunManager(): RunManager {
 
     const session = await store.getSession(sessionId);
     if (!session) throw new Error(`Session ${sessionId} not found`);
+    const runner = getRunner();
+
+    const requestedBacktestIds = kind === 'refine' ? extractBacktestIds(message ?? '') : [];
+    const referencedVersions =
+      kind === 'refine' ? referencedBacktests(session, message ?? '') : [];
+    if (requestedBacktestIds.length !== referencedVersions.length) {
+      const found = new Set(referencedVersions.map((version) => version.id));
+      const missing = requestedBacktestIds.find((id) => !found.has(id));
+      throw new Error(`Backtest ${missing ?? requestedBacktestIds[0]} was not found in this strategy.`);
+    }
+    const referencedBase = referencedVersions[0];
+    if (referencedBase && !referencedBase.result.code) {
+      throw new Error(
+        `Backtest ${referencedBase.id} cannot be restored because its strategy code is unavailable.`,
+      );
+    }
+    const acceptedSession = referencedBase
+      ? sessionAtBacktest(session, referencedBase)
+      : session;
 
     const dir = workDir(sessionId);
     await ensureDir(dir);
 
     // Write params.json for a no-LLM date-only re-run (PROTOCOL §5.6).
     const params = {
-      start: session.period.start,
-      end: session.period.end,
-      startingCapital: session.startingCapital,
+      start: acceptedSession.period.start,
+      end: acceptedSession.period.end,
+      startingCapital: acceptedSession.startingCapital,
     };
     await writeFile(paramsFile(sessionId), `${JSON.stringify(params, null, 2)}\n`, 'utf8');
 
@@ -477,12 +700,18 @@ function createRunManager(): RunManager {
       await rm(workDataDir(sessionId), { recursive: true, force: true });
     }
 
-    // For re-runs, restore strategy.py from the saved result if it's missing.
-    if ((kind === 'refine' || kind === 'rerun' || kind === 'refresh') && session.result?.code) {
-      if (!(await fileExists(strategyFile(sessionId)))) {
-        await writeFile(strategyFile(sessionId), session.result.code, 'utf8');
+    // Restore the last result accepted by the UI before any non-initial run.
+    // Refinements also get stable backup files for candidate comparisons and
+    // rollback when an "improvement" fails to beat its stated baseline.
+    if (kind === 'refine' || kind === 'rerun' || kind === 'refresh') {
+      if (referencedVersions.length > 0) {
+        await prepareReferencedWorkStates(sessionId, session, referencedVersions);
       }
+      await prepareAcceptedWorkState(sessionId, acceptedSession, kind === 'refine');
     }
+
+    const basedOnBacktestId =
+      referencedBase?.id ?? (session.result ? (latestBacktest(session)?.id ?? null) : null);
 
     // A `rerun`/`refresh` re-executes strategy.py with NO agent involved, so it
     // is only possible when a runnable program actually exists. Sessions that
@@ -491,7 +720,7 @@ function createRunManager(): RunManager {
     // without writing result.json — surfacing a baffling ENOENT. Escalate those
     // to a full agent run that rebuilds the strategy from the prompt instead.
     // Only the codex runner re-executes the file; the mock always regenerates.
-    if ((kind === 'rerun' || kind === 'refresh') && getRunner().kind === 'codex') {
+    if ((kind === 'rerun' || kind === 'refresh') && runner.kind === 'codex') {
       if (!(await strategyCanProduceResult(sessionId))) {
         kind = 'initial';
         session.chat.push({
@@ -517,6 +746,22 @@ function createRunManager(): RunManager {
     }
     await store.saveSession(session);
 
+    // Snapshot immediately before runner.start() (there is no await between
+    // the two reads), so these are the exact app-wide values Codex receives.
+    // Later settings changes must not rewrite an older response's provenance.
+    const responseUsage: Omit<AgentResponseMetadata, 'durationMs'> =
+      runner.kind === 'mock'
+        ? { model: null, effort: null, mode: 'mock' }
+        : kind === 'initial' || kind === 'refine'
+          ? { ...getSettingsSync(), mode: 'codex' }
+          : { model: null, effort: null, mode: 'saved-code' };
+
+    // The agent sees the complete current conversation/history, but its period,
+    // capital, strategy, and result begin at the explicitly referenced version.
+    const runnerSession = referencedBase
+      ? sessionAtBacktest(session, referencedBase)
+      : session;
+
     const controller = new AbortController();
     const now = Date.now();
     const run: ActiveRun = {
@@ -528,6 +773,9 @@ function createRunManager(): RunManager {
       steps: [],
       statusWord: STATUS_WORDS[0],
       messageKeys: new Set<string>(),
+      pendingAgentMessage: null,
+      responseUsage,
+      basedOnBacktestId,
       lastHeartbeatAt: now,
       runStartedAt: now,
       lastStatusAt: now,
@@ -540,12 +788,15 @@ function createRunManager(): RunManager {
 
     let handle: RunHandle;
     try {
-      handle = getRunner().start({
-        session,
+      handle = runner.start({
+        session: runnerSession,
         workDir: dir,
         kind,
         message,
         attachments,
+        ...(responseUsage.mode === 'codex'
+          ? { model: responseUsage.model ?? undefined, effort: responseUsage.effort ?? undefined }
+          : {}),
         onEvent,
         signal: controller.signal,
       });
