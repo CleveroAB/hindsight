@@ -55,6 +55,7 @@ export function makeSession(patch: Partial<Session> = {}): Session {
     status: 'done',
     result: null,
     chat: [],
+    backtests: [],
     dataSnapshotAt: null,
     createdAt: now,
     updatedAt: now,

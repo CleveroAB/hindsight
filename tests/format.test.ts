@@ -107,9 +107,11 @@ describe('durations', () => {
     expect(formatElapsed(-5000)).toBe('0:00');
   });
 
-  test('formatDuration rounds to whole seconds', () => {
-    expect(formatDuration(41000)).toBe('41s');
-    expect(formatDuration(41600)).toBe('42s');
-    expect(formatDuration(-1)).toBe('0s');
+  test('formatDuration rounds to whole seconds and spells out units', () => {
+    expect(formatDuration(41000)).toBe('41 seconds');
+    expect(formatDuration(41600)).toBe('42 seconds');
+    expect(formatDuration(-1)).toBe('0 seconds');
+    expect(formatDuration(161000)).toBe('2 minutes 41 seconds');
+    expect(formatDuration(3600000)).toBe('1 hour');
   });
 });
