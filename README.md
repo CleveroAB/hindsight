@@ -134,6 +134,13 @@ Copy `.env.example` → `.env` and adjust:
 | `HINDSIGHT_CODEX_HOME` | `~/.codex` | Codex auth mounted (read-only) into the container |
 | `HINDSIGHT_CODEX_MODEL` | `gpt-5.6-sol` | model passed to `codex exec -m` |
 | `HINDSIGHT_DATA_DIR` | `./data` | session store + per-session workdirs |
+| `HINDSIGHT_SIGNAL_PROVIDER` | `imessage` | signal delivery: `imessage`, `signal`, `poke`, or `webhook` |
+| `HINDSIGHT_SIGNAL_PHONE` | — | default recipient (E.164) for buy/sell signal messages |
+| `HINDSIGHT_SIGNAL_CLI_URL` | — | `signal` provider: base URL of the signal-cli-rest-api service |
+| `HINDSIGHT_SIGNAL_SENDER` | — | `signal` provider: bot number (E.164) messages are sent from |
+| `HINDSIGHT_SIGNAL_CLI_AUTH` | — | `signal` provider: optional `Authorization` header value |
+| `HINDSIGHT_POKE_API_KEY` | — | API key for the `poke` provider |
+| `HINDSIGHT_SIGNAL_WEBHOOK_URL` | — | target URL for the `webhook` provider |
 
 ## Project layout
 
@@ -147,6 +154,7 @@ lib/server/           Session store, run manager, and the agent layer
   agent/               mock runner, codex-in-Docker runner, prompt builder, mock curve
 docker/               Image + AGENTS.md + entrypoint for real Codex runs
 proxy.ts              Tunnel gate: share links expose ONE read-only page, nothing else
+scripts/dev.mjs       Dev launcher: prepares the agent image when needed, runs next dev
 scripts/seed.mjs      Seeds the three example strategies
 PROTOCOL.md           The binding API / SSE / agent-file contract
 ```
