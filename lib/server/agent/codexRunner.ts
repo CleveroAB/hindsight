@@ -29,7 +29,7 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import type { AgentRunner, RunHandle, RunInput } from '@/lib/agent-runner';
 import { STATUS_WORDS } from '@/lib/agent-runner';
-import type { EquityPoint, Period, PositionsPoint, StatusWord, StrategyResult } from '@/lib/types';
+import type { AgentEvent, EquityPoint, Period, PositionsPoint, StatusWord, StrategyResult } from '@/lib/types';
 import { hashSeed } from '@/lib/chart';
 import { getSettingsSync } from '@/lib/server/settings';
 import { buildCodexPrompt } from './prompt';
@@ -72,6 +72,63 @@ function round1(n: number): number {
  * Exported for the signals engine, which re-executes saved code in a scratch
  * workdir and must read its result.json exactly the way a real run would.
  */
+ * Parse one `events.ndjson` line into the AgentEvent it stands for, or null if
+ * the line is unusable (PROTOCOL §3). Pure — the caller stamps `elapsedMs` on
+ * `status`, since the runner is authoritative on elapsed time.
+ */
+export function parseAgentEvent(line: string): AgentEvent | null {
+  let obj: { type?: unknown; [k: string]: unknown };
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    return null; // parse failures are logged inside the container; ignore here
+  }
+  if (!obj || typeof obj.type !== 'string') return null;
+  switch (obj.type) {
+    case 'status': {
+      // Only forward one of the five known StatusWords; a bogus label would
+      // halt the whimsical status auto-cycle (indexOf -> -1) and render raw.
+      if (!STATUS_WORDS.includes(obj.label as StatusWord)) return null;
+      return { type: 'status', label: obj.label as StatusWord, elapsedMs: 0 };
+    }
+    case 'step': {
+      const id = obj.id;
+      const state = obj.state;
+      if (typeof id !== 'string' || (state !== 'active' && state !== 'done')) return null;
+      return { type: 'step', id, label: String(obj.label ?? ''), state };
+    }
+    case 'meta':
+      return {
+        type: 'meta',
+        name: String(obj.name ?? ''),
+        description: String(obj.description ?? ''),
+      };
+    case 'message': {
+      const role = obj.role;
+      if (role !== 'agent' && role !== 'system') return null;
+      return { type: 'message', role, text: String(obj.text ?? '') };
+    }
+    case 'log':
+      return { type: 'log', text: String(obj.text ?? '') };
+    default:
+      // result/error/done are not valid agent events — ignore.
+      return null;
+  }
+}
+
+/**
+ * Coerce a raw equity-curve value, treating anything that isn't a number or a
+ * non-empty numeric string as MISSING (NaN), so the caller's isFinite filter
+ * drops it. Plain `Number()` would turn `null` — a gap in the agent's data —
+ * into a real $0 point, drawing a crash to zero that never happened.
+ */
+function toValue(v: unknown): number {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string' && v.trim() !== '') return Number(v);
+  return Number.NaN;
+}
+
+/** Convert a raw result.json shape into a canonical StrategyResult. */
 export function normalizeResultJson(
   raw: unknown,
   session: RunInput['session'],
@@ -96,10 +153,10 @@ export function normalizeResultJson(
     const pts: EquityPoint[] = [];
     for (const item of curve) {
       if (Array.isArray(item) && item.length >= 2) {
-        pts.push({ date: String(item[0]), value: Number(item[1]) });
+        pts.push({ date: String(item[0]), value: toValue(item[1]) });
       } else if (item && typeof item === 'object' && 'date' in item && 'value' in item) {
         const o = item as { date: unknown; value: unknown };
-        pts.push({ date: String(o.date), value: Number(o.value) });
+        pts.push({ date: String(o.date), value: toValue(o.value) });
       }
     }
     return pts
@@ -259,57 +316,11 @@ export class CodexRunner implements AgentRunner {
     let inFlight = false;
 
     const forwardLine = (line: string): void => {
-      let obj: { type?: unknown; [k: string]: unknown };
-      try {
-        obj = JSON.parse(line);
-      } catch {
-        return; // parse failures are logged inside the container; ignore here
-      }
-      if (!obj || typeof obj.type !== 'string') return;
-      switch (obj.type) {
-        case 'status': {
-          // Only forward one of the five known StatusWords; a bogus label would
-          // halt the whimsical status auto-cycle (indexOf -> -1) and render raw.
-          if (!STATUS_WORDS.includes(obj.label as StatusWord)) break;
-          // The runner is authoritative on elapsed time; stamp it ourselves.
-          onEvent({
-            type: 'status',
-            label: obj.label as StatusWord,
-            elapsedMs: Date.now() - startTime,
-          });
-          break;
-        }
-        case 'step': {
-          const id = obj.id;
-          const state = obj.state;
-          if (typeof id === 'string' && (state === 'active' || state === 'done')) {
-            onEvent({ type: 'step', id, label: String(obj.label ?? ''), state });
-          }
-          break;
-        }
-        case 'meta': {
-          onEvent({
-            type: 'meta',
-            name: String(obj.name ?? ''),
-            description: String(obj.description ?? ''),
-          });
-          break;
-        }
-        case 'message': {
-          const role = obj.role;
-          if (role === 'agent' || role === 'system') {
-            onEvent({ type: 'message', role, text: String(obj.text ?? '') });
-          }
-          break;
-        }
-        case 'log': {
-          onEvent({ type: 'log', text: String(obj.text ?? '') });
-          break;
-        }
-        default:
-          // result/error/done are not valid agent events — ignore.
-          break;
-      }
+      const event = parseAgentEvent(line);
+      if (!event) return;
+      // The runner is authoritative on elapsed time; stamp it ourselves.
+      if (event.type === 'status') event.elapsedMs = Date.now() - startTime;
+      onEvent(event);
     };
 
     const pump = async (): Promise<void> => {

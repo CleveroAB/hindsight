@@ -261,16 +261,28 @@ function firstFinite(...values: unknown[]): number | undefined {
   return undefined;
 }
 
+/**
+ * Coerce a raw equity-curve value, treating anything that isn't a number or a
+ * non-empty numeric string as MISSING (NaN), so the isFinite filter below drops
+ * it. Plain `Number()` would turn `null` — a gap in the data — into a real $0
+ * point, drawing a crash to zero that never happened.
+ */
+function toValue(v: unknown): number {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string' && v.trim() !== '') return Number(v);
+  return Number.NaN;
+}
+
 /** Normalise any equity-curve shape (EquityPoint[] or `[date,value][]`) to points. */
 function toPoints(curve: unknown): EquityPoint[] {
   if (!Array.isArray(curve)) return [];
   const pts: EquityPoint[] = [];
   for (const item of curve) {
     if (Array.isArray(item) && item.length >= 2) {
-      pts.push({ date: String(item[0]), value: Number(item[1]) });
+      pts.push({ date: String(item[0]), value: toValue(item[1]) });
     } else if (item && typeof item === 'object' && 'date' in item && 'value' in item) {
       const o = item as { date: unknown; value: unknown };
-      pts.push({ date: String(o.date), value: Number(o.value) });
+      pts.push({ date: String(o.date), value: toValue(o.value) });
     }
   }
   const clean = pts.filter((p) => p.date && Number.isFinite(p.value));
