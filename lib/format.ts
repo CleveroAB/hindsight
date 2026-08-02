@@ -81,10 +81,23 @@ export function formatElapsed(ms: number): string {
   return `${mm}:${ss.toString().padStart(2, '0')}`;
 }
 
-/** `Backtest finished in 41s` — from a duration in ms. */
+/** `2 minutes 41 seconds` — from a duration in ms, omitting empty larger units. */
 export function formatDuration(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000));
-  return `${s}s`;
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts: string[] = [];
+
+  const add = (value: number, unit: string): void => {
+    parts.push(`${value} ${unit}${value === 1 ? '' : 's'}`);
+  };
+
+  if (hours > 0) add(hours, 'hour');
+  if (minutes > 0) add(minutes, 'minute');
+  if (seconds > 0 || parts.length === 0) add(seconds, 'second');
+
+  return parts.join(' ');
 }
 
 export { MINUS, EN_DASH };

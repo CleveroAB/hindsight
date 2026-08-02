@@ -129,7 +129,6 @@ export default function ShareControl({ sessionId, shareToken }: ShareControlProp
           background: 'transparent',
           cursor: 'pointer',
           padding: 0,
-          marginTop: 8,
         }}
       >
         <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">

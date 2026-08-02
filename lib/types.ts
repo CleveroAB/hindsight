@@ -22,6 +22,19 @@ export interface EquityPoint {
   value: number;
 }
 
+/**
+ * Target portfolio at one bar's close — what the strategy HOLDS after acting on
+ * that bar's signals. `date` is `YYYY-MM-DD`; `weights` maps ticker → fraction
+ * of portfolio value (0..1; cash implied by a sum below 1; negative = short).
+ */
+export interface PositionsPoint {
+  date: string;
+  weights: Record<string, number>;
+}
+
+/** How the comparable asset was selected for one accepted strategy version. */
+export type BenchmarkSelectionSource = 'agent' | 'strategy' | 'fallback' | 'override';
+
 export type ChatRole = 'user' | 'agent' | 'system';
 
 /**
@@ -41,6 +54,20 @@ export interface Attachment {
   size: number;
 }
 
+/** Run details attached to the successful agent response they describe. */
+export interface AgentResponseMetadata {
+  /** Wall-clock duration of the completed run, in milliseconds. */
+  durationMs: number;
+  /** Exact Codex model used, or null when this was a mock/saved-code run. */
+  model: string | null;
+  /** Exact reasoning effort used, or null when no model was involved. */
+  effort: CodexEffort | null;
+  /** Distinguishes non-LLM runs so the UI can explain a null model accurately. */
+  mode: 'codex' | 'mock' | 'saved-code' | 'legacy';
+  /** Copyable, session-scoped version id, e.g. `BT-003`. */
+  backtestId?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -48,6 +75,8 @@ export interface ChatMessage {
   text: string;
   /** Images sent with this message. User messages only; absent when there are none. */
   attachments?: Attachment[];
+  /** Successful-run details. Agent messages only; absent on errors and legacy data. */
+  metadata?: AgentResponseMetadata;
   createdAt: number;
 }
 
@@ -55,8 +84,16 @@ export interface ChatMessage {
 export interface StrategyResult {
   /** Portfolio value over time. Ascending by date. */
   equityCurve: EquityPoint[];
-  /** Optional benchmark overlay (e.g. SPY). Off for v1 — may be null/absent. */
+  /** Bar-close target weights over time. Ascending by date; absent on legacy results. */
+  positions?: PositionsPoint[];
+  /** Optional precomputed benchmark curve; normally null because the server fetches it. */
   benchmark?: EquityPoint[] | null;
+  /** Comparable asset reassessed for this exact strategy version. */
+  benchmarkTicker?: string;
+  /** Short explanation of why that asset is an appropriate comparison. */
+  benchmarkReason?: string;
+  /** Whether the choice came from the agent, strategy inspection, or fallback. */
+  benchmarkSource?: BenchmarkSelectionSource;
   /** Portfolio value at the end of the period. */
   finalValue: number;
   /** Portfolio value at the start (== session.startingCapital). */
@@ -71,6 +108,74 @@ export interface StrategyResult {
   durationMs: number;
   /** Agent-inferred period; the run manager adopts it onto the session. */
   period?: Period;
+}
+
+/** Immutable, recoverable snapshot of one successfully completed backtest. */
+export interface BacktestVersion {
+  /** Session-scoped sequential id (`BT-001`, `BT-002`, ...). */
+  id: string;
+  /** Chat response that presents this version; absent only for malformed legacy runs. */
+  messageId?: string;
+  /** Version used as the starting point, if any. */
+  basedOn: string | null;
+  name: string;
+  description: string;
+  period: Period;
+  startingCapital: number;
+  /** Includes the exact equity curve and strategy.py source for restoration. */
+  result: StrategyResult;
+  createdAt: number;
+}
+
+// ---------------------------------------------------------------------------
+// Strategy activation — scheduled buy/sell signal checks. Activating a strategy
+// re-executes its SAVED code on a derived schedule (no LLM) and messages the
+// user when the target portfolio changes. State lives on the session.
+// ---------------------------------------------------------------------------
+
+/** How often an activated strategy is re-checked for position changes. */
+export type SignalCadence = 'hourly' | 'daily' | 'weekly' | 'monthly';
+
+/** One target-weight move between the last two bars. `from`/`to` are weights. */
+export interface SignalChange {
+  ticker: string;
+  /** BUY = target weight increased; SELL = decreased (to 0 = fully exited). */
+  action: 'BUY' | 'SELL';
+  from: number;
+  to: number;
+}
+
+/** The outcome of one signal check that saw a new bar. */
+export interface SignalUpdate {
+  /** Bar date (`YYYY-MM-DD`) the signal is for. */
+  date: string;
+  /** Weight changes vs the previous bar; empty = HOLD. */
+  changes: SignalChange[];
+  /** Portfolio move on that bar, percent, or null when not computable. */
+  dayChangePct: number | null;
+  /** True when derived without a positions series (legacy saved code). */
+  inferred: boolean;
+  /** When the check ran (epoch ms). */
+  checkedAt: number;
+}
+
+/** Live activation state for a strategy receiving scheduled signal checks. */
+export interface StrategyActivation {
+  /** E.164 number the signal messages go to. */
+  phone: string;
+  activatedAt: number;
+  /** Check cadence derived from the strategy (asset class + rebalance frequency). */
+  cadence: SignalCadence;
+  /** Human sentence explaining the derived schedule; shown in UI + messages. */
+  cadenceReason: string;
+  /** When the next scheduled check fires (epoch ms). */
+  nextCheckAt: number;
+  /** When the last check ran (epoch ms), or null before the first. */
+  lastCheckAt: number | null;
+  /** Most recent check outcome that saw a new bar, or null. */
+  lastSignal: SignalUpdate | null;
+  /** Error from the most recent failed check, or null while healthy. */
+  lastError: string | null;
 }
 
 /**
@@ -92,6 +197,8 @@ export interface Session {
   /** Latest completed result, or null if never finished a run. */
   result: StrategyResult | null;
   chat: ChatMessage[];
+  /** Successful versions in ascending id order. Legacy files are hydrated on read. */
+  backtests: BacktestVersion[];
   /** When data was last fetched/snapshotted for this session (epoch ms), or null. */
   dataSnapshotAt: number | null;
   /**
@@ -99,6 +206,8 @@ export interface Session {
    * tunnel-safe read-only page — see PROTOCOL.md §6). Absent/null = not shared.
    */
   shareToken?: string | null;
+  /** Scheduled signal-check state. Absent/null = not activated. */
+  activation?: StrategyActivation | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -147,6 +256,8 @@ export interface MessageEvent {
   type: 'message';
   role: 'agent' | 'system';
   text: string;
+  /** Added by the run manager to the final successful agent response. */
+  metadata?: AgentResponseMetadata;
 }
 
 /** Raw agent log line, surfaced only for debugging (not shown in chat). */
@@ -254,8 +365,14 @@ export interface RerunBody {
  * Computed on demand (no agent run) so the Compare toggle is instant.
  */
 export interface BenchmarkResponse {
-  /** The symbol compared against, e.g. "QQQ" (inferred from the strategy). */
+  /** The symbol compared against, e.g. "QQQ". */
   ticker: string;
+  /** Why this benchmark is appropriate for the selected strategy version. */
+  reason: string;
+  /** How the choice was made and revalidated. */
+  source: BenchmarkSelectionSource;
+  /** Version being compared; null only for an unversioned legacy result. */
+  backtestId: string | null;
   /** Buy-and-hold portfolio value over time. Ascending by date. */
   curve: EquityPoint[];
   /** Value at the end of the period. */
@@ -281,6 +398,49 @@ export interface ShareInfo {
   url: string | null;
   /** Whether the `cloudflared` CLI is on this machine's PATH — the UI warns when not. */
   cloudflaredInstalled: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Strategy activation API (POST/DELETE /api/sessions/[id]/activate,
+// POST …/activate/check, GET /api/signals). The persisted state itself is
+// `StrategyActivation` above; see PROTOCOL.md §8.
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/sessions/[id]/activate — start (or refresh) scheduled signal
+ * checks. `phone` is E.164 (spaces/dashes tolerated); when omitted the server
+ * falls back to HINDSIGHT_SIGNAL_PHONE. Returns the updated `Session`.
+ */
+export interface ActivateBody {
+  phone?: string;
+}
+
+/** One activated strategy in the signals overview. */
+export interface ActiveSignalEntry {
+  sessionId: string;
+  name: string;
+  cadence: SignalCadence;
+  /** Human sentence explaining the derived schedule. */
+  cadenceReason: string;
+  /** When the next scheduled check fires (epoch ms). */
+  nextCheckAt: number;
+  /** Most recent check outcome that saw a new bar, or null. */
+  lastSignal: SignalUpdate | null;
+}
+
+/** GET /api/signals — activation defaults + every activated strategy. */
+export interface SignalsOverview {
+  /** HINDSIGHT_SIGNAL_PHONE when set and valid E.164, else null. Prefills the UI. */
+  defaultPhone: string | null;
+  /** The configured outbound provider: `imessage` (default), `signal`, `poke`, or `webhook`. */
+  provider: string;
+  active: ActiveSignalEntry[];
+}
+
+/** POST /api/sessions/[id]/activate/check — `update` is null when no new bar. */
+export interface SignalCheckResponse {
+  ok: true;
+  update: SignalUpdate | null;
 }
 
 // ---------------------------------------------------------------------------

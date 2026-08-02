@@ -12,10 +12,11 @@
 // ============================================================================
 
 import { hashSeed, rng, seededWalk } from '@/lib/chart';
-import type { EquityPoint, Period } from '@/lib/types';
+import type { EquityPoint, Period, PositionsPoint } from '@/lib/types';
 
 export interface MockCurve {
   equityCurve: EquityPoint[];
+  positions: PositionsPoint[];
   finalValue: number;
   returnPct: number;
   code: string;
@@ -26,6 +27,8 @@ export interface MockCurve {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const YEAR_MS = 365.25 * DAY_MS;
 const TEN_YEARS_MS = 10 * YEAR_MS;
+/** Cap on the positions series — the most recent bars win (PROTOCOL §4). */
+const MAX_POSITIONS_POINTS = 750;
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
@@ -215,6 +218,9 @@ function buildCode(name: string, description: string, cadence: string): string {
     '    "finalValue": round(final, 2),',
     '    "returnPct": round((final / CAPITAL - 1.0) * 100.0, 1),',
     '    "equityCurve": curve,',
+    '    # bar-close target weights actually HELD after acting on signals (optional)',
+    '    "positions": [[d.strftime("%Y-%m-%d"), {t: round(float(w), 4) for t, w in r.items()}]',
+    '                  for d, r in weights.tail(750).iterrows()],',
     '    "benchmark": None,',
     '    "code": open(__file__).read(),',
     '    "period": {"start": START, "end": END},',
@@ -244,6 +250,60 @@ function buildDates(startMs: number, endMs: number, n: number): string[] {
     prev = iso;
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Bar-close positions: a deterministic two-ticker rotation derived from the
+// generated curve itself, so mock results exercise the optional `positions`
+// series (PROTOCOL §4) end to end without any extra randomness.
+// ---------------------------------------------------------------------------
+
+/** Two plausible tickers for the rotation — [core, hedge] — keyed off the prompt. */
+function mockTickers(prompt: string): [string, string] {
+  const p = prompt.toLowerCase();
+  if (/\b(btc|bitcoin|eth|ethereum|crypto|coin)\b/.test(p)) return ['BTC-USD', 'ETH-USD'];
+  if (/\b(qqq|nasdaq|tech|software|semis?|nvda|nvidia)\b/.test(p)) return ['QQQ', 'SPY'];
+  if (/\b(bond|bonds|treasur\w*|60\/40|tlt)\b/.test(p)) return ['SPY', 'TLT'];
+  if (/\b(gold|gld)\b/.test(p)) return ['GLD', 'SPY'];
+  return ['SPY', 'QQQ'];
+}
+
+/**
+ * Rotate weight between two plausible tickers using a short-vs-long moving
+ * average of the generated curve: risk-on holds 70/30 core/hedge, risk-off
+ * holds 60% hedge with the rest in cash (sum < 1). The MAs are taken over the
+ * curve's trend-free log residuals — on the raw values the drift dominates the
+ * wiggle and the crossover would never flip, leaving a constant (undiffable)
+ * book. Pure and deterministic — same curve in, same series out — and capped
+ * to the most recent bars.
+ */
+function derivePositions(prompt: string, equityCurve: EquityPoint[]): PositionsPoint[] {
+  const [core, hedge] = mockTickers(prompt);
+  const n = equityCurve.length;
+
+  // Log residuals: log(value) minus the straight line between its endpoints.
+  const logs = equityCurve.map((point) => Math.log(Math.max(point.value, 1e-6)));
+  const l0 = logs[0];
+  const lN = logs[n - 1];
+  const prefix = new Array<number>(n + 1);
+  prefix[0] = 0;
+  for (let i = 0; i < n; i++) {
+    const t = n === 1 ? 0 : i / (n - 1);
+    prefix[i + 1] = prefix[i] + (logs[i] - (l0 + (lN - l0) * t));
+  }
+  // Mean of residuals[from..to) via the prefix sums — O(1) per bar.
+  const mean = (from: number, to: number): number => (prefix[to] - prefix[from]) / (to - from);
+
+  const positions: PositionsPoint[] = [];
+  for (let i = Math.max(0, n - MAX_POSITIONS_POINTS); i < n; i++) {
+    const fast = mean(Math.max(0, i - 4), i + 1); // ~5-bar MA
+    const slow = mean(Math.max(0, i - 19), i + 1); // ~20-bar MA
+    positions.push({
+      date: equityCurve[i].date,
+      weights: fast >= slow ? { [core]: 0.7, [hedge]: 0.3 } : { [hedge]: 0.6 },
+    });
+  }
+  return positions;
 }
 
 // ---------------------------------------------------------------------------
@@ -296,11 +356,12 @@ export function generateMockCurve(input: {
 
   const finalValue = equityCurve[n - 1].value;
   const returnPct = round1((finalValue / capital - 1) * 100);
+  const positions = derivePositions(prompt, equityCurve);
 
   const name = deriveName(prompt);
   const cadence = strategyCadence(prompt);
   const description = deriveDescription(prompt, cadence);
   const code = buildCode(name, description, cadence);
 
-  return { equityCurve, finalValue, returnPct, code, name, description };
+  return { equityCurve, positions, finalValue, returnPct, code, name, description };
 }

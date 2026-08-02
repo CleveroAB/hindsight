@@ -3,8 +3,7 @@
 // The Compare control under the change line: a small icon-only pill that
 // overlays a buy-and-hold curve for the comparable equity (e.g. QQQ for a QQQ
 // strategy) on the hero chart. Icon-only per the design — once the overlay is
-// on, a quiet legend beside it names the symbol and its return, which is also
-// what identifies the dashed line on the chart.
+// on, a quiet legend beside it names the symbol and its return.
 
 import { formatSignedPercent } from '@/lib/format';
 
@@ -15,6 +14,8 @@ export interface CompareToggleProps {
   ticker: string | null;
   /** Buy-and-hold return of that symbol over the same period, if loaded. */
   returnPct: number | null;
+  /** Why this symbol was validated for the presented strategy version. */
+  reason: string | null;
   /** Human-readable failure from the last attempt, if any. */
   error: string | null;
   disabled?: boolean;
@@ -51,11 +52,13 @@ export default function CompareToggle({
   loading,
   ticker,
   returnPct,
+  reason,
   error,
   disabled = false,
   onToggle,
 }: CompareToggleProps) {
   const label = ticker ? `Compare with ${ticker}` : 'Compare with a benchmark';
+  const explanation = reason ? `${label} — ${reason}` : label;
   const iconColor = active ? 'var(--text)' : 'var(--icon)';
 
   return (
@@ -66,7 +69,7 @@ export default function CompareToggle({
         disabled={disabled || loading}
         aria-pressed={active}
         aria-label={label}
-        title={label}
+        title={explanation}
         style={{
           height: 26,
           padding: '0 9px',
@@ -105,21 +108,11 @@ export default function CompareToggle({
         </span>
       ) : active && ticker ? (
         <span
-          className="hs-fade-in"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          className="num hs-fade-in"
+          title={reason ?? undefined}
+          style={{ fontSize: 12, color: 'var(--muted)' }}
         >
-          <svg width="16" height="6" viewBox="0 0 16 6" aria-hidden="true" style={{ flex: 'none' }}>
-            <path
-              d="M0 3 H16"
-              stroke="var(--benchmark)"
-              strokeWidth="1.5"
-              strokeDasharray="4 4"
-            />
-          </svg>
-          <span className="num" style={{ fontSize: 12, color: 'var(--muted)' }}>
-            {ticker} buy &amp; hold
-            {returnPct === null ? '' : ` ${formatSignedPercent(returnPct)}`}
-          </span>
+          {`${ticker} | buy & hold${returnPct === null ? '' : ` ${formatSignedPercent(returnPct)}`}`}
         </span>
       ) : null}
     </div>

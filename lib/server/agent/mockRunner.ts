@@ -15,6 +15,7 @@ import { STATUS_WORDS } from '@/lib/agent-runner';
 import type { ProgressEvent, StatusWord, StrategyResult } from '@/lib/types';
 import { formatMoney, formatSignedPercent, formatYearRange } from '@/lib/format';
 import { hashSeed } from '@/lib/chart';
+import { referencedBacktests } from '@/lib/backtests';
 import { generateMockCurve, strategyCadence, type MockCurve } from './mockCurve';
 
 // Status words by role (exact glyphs come from the frozen STATUS_WORDS tuple).
@@ -108,9 +109,27 @@ export class MockRunner implements AgentRunner {
     signal.addEventListener('abort', onAbort);
 
     // The curve is deterministic and cheap — compute it up front so `meta` can
-    // name the strategy early. Refine re-seeds by appending the change request.
+    // name the strategy early. Refinements use every user turn, matching the
+    // real runner's cumulative conversation semantics rather than forgetting
+    // all but the opening prompt and newest message.
+    const userConversation = session.chat
+      .filter((entry) => entry.role === 'user')
+      .map((entry) => entry.text)
+      .filter(Boolean)
+      .join('\n');
+    const referencedBase =
+      kind === 'refine' ? referencedBacktests(session, message ?? '')[0] : undefined;
     const curvePrompt =
-      kind === 'refine' && message ? `${session.prompt}\n${message}` : session.prompt;
+      kind === 'refine'
+        ? referencedBase
+          ? [
+              referencedBase.name,
+              referencedBase.description,
+              referencedBase.result.code ?? '',
+              message ?? '',
+            ].join('\n')
+          : userConversation || message || session.prompt
+        : session.prompt;
     const curve = generateMockCurve({
       prompt: curvePrompt,
       period: session.period,
@@ -134,6 +153,7 @@ export class MockRunner implements AgentRunner {
     const resolveResult = (): void => {
       const result: StrategyResult = {
         equityCurve: curve.equityCurve,
+        positions: curve.positions,
         benchmark: null,
         finalValue: curve.finalValue,
         startingCapital: session.startingCapital,

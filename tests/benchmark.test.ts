@@ -37,9 +37,11 @@ describe('inferBenchmarkTicker', () => {
     expect(infer({ prompt: 'RSI signals on the NASDAQ, trade QQQ' })).toBe('QQQ');
   });
 
-  test('an unlisted all-caps symbol is still taken as the ticker', () => {
-    expect(infer({ name: 'NVDA momentum' })).toBe('NVDA');
-    expect(infer({ prompt: 'pairs trade KO against PEP' })).toBe('KO');
+  test('an unlisted all-caps symbol falls back to SPY', () => {
+    // Only symbols on the known list (or in the strategy itself) are accepted;
+    // anything else defers to the SPY default rather than guessing.
+    expect(infer({ name: 'NVDA momentum' })).toBe('SPY');
+    expect(infer({ prompt: 'pairs trade KO against PEP' })).toBe('SPY');
   });
 
   test('the name, prompt and description are all searched', () => {
@@ -63,12 +65,10 @@ describe('inferBenchmarkTicker', () => {
     expect(inferred).toBe('SPY');
   });
 
-  test('an all-caps prompt can still yield a junk symbol', () => {
-    // Documents a known edge: the jargon list can only exclude words it knows,
-    // so SHOUTED prompts surface the first unlisted all-caps word. Harmless in
-    // practice — an inferred symbol that does not resolve falls back to SPY at
-    // fetch time (PROTOCOL §6) — but it is not a smart choice.
-    expect(infer({ prompt: 'BUY AND SELL WEEKLY' })).toBe('WEEKLY');
+  test('an all-caps prompt cannot yield a junk symbol', () => {
+    // SHOUTED prompts used to surface the first unlisted all-caps word; the
+    // known-ticker allowlist closes that edge, so junk words defer to SPY.
+    expect(infer({ prompt: 'BUY AND SELL WEEKLY' })).toBe('SPY');
   });
 
   test('sentence-case prose is not mistaken for a symbol', () => {
@@ -130,7 +130,10 @@ describe('isValidTicker', () => {
 });
 
 describe('benchmarkCurve', () => {
-  const period: Period = { start: '2020-01-01', end: '2020-01-31' };
+  // The fixtures below carry 2-5 daily bars from 2020-01-01, so the requested
+  // period must end within benchmarkCurve's 14-day coverage tolerance of the
+  // last bar — a longer period is rejected as not covering the request.
+  const period: Period = { start: '2020-01-01', end: '2020-01-05' };
   const realFetch = globalThis.fetch;
 
   afterEach(() => {
@@ -250,7 +253,7 @@ describe('benchmarkCurve', () => {
     }) as unknown as typeof fetch;
 
     await benchmarkCurve('TESTJ', period, 10000);
-    await benchmarkCurve('TESTJ', { start: '2021-01-01', end: '2021-01-31' }, 10000);
+    await benchmarkCurve('TESTJ', { start: '2020-01-01', end: '2020-01-04' }, 10000);
     expect(calls).toBe(2);
   });
 });

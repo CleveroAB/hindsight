@@ -34,7 +34,9 @@ bun run dev        # http://localhost:3000   (or: bun run build && bun run start
 
 By default Hindsight runs the **mock agent** — an in-process, procedural backtester that
 needs no Docker or API keys. The whole app is fully usable and demoable this way. To run
-**real** backtests, enable the Codex + Docker agent (below).
+**real** backtests, enable the Codex + Docker agent (below). In Codex mode, `bun run dev`
+checks that Docker is available and builds the local agent image before starting Next.js;
+unchanged image layers are reused from Docker's build cache.
 
 ## Two agent backends
 
@@ -48,10 +50,12 @@ Selected by `HINDSIGHT_AGENT` (see `.env.example`):
 ### Enabling the real (Codex) backend
 
 ```bash
-bun run docker:build                   # builds ./docker → hindsight-agent:latest
 # ensure the Docker daemon is running and you're logged into Codex CLI (~/.codex)
-HINDSIGHT_AGENT=codex bun run dev      # or: bun run build && HINDSIGHT_AGENT=codex bun run start
+HINDSIGHT_AGENT=codex bun run dev
 ```
+
+`bun run docker:build` remains available when you want to build the agent image manually,
+including before a production `bun run start`.
 
 If Codex isn't signed in on the host, the app says so instead of failing mid-run: the
 empty-state composer is disabled with "Codex is not signed in on this machine." plus the
@@ -86,15 +90,20 @@ Browser (React)  ──HTTP──▶  Next.js API routes  ──▶  Run manager
   then transitions to the chart + chat "Expanded" view.
 - **Re-runs reuse code.** Changing the dates ("Run again") re-executes the saved strategy
   over the new range with no LLM call. "Refresh data" clears the per-session data snapshot
-  and re-fetches. Chatting refines the strategy (the agent edits the existing code).
+  and re-fetches. Chat refinements include the full conversation and previous accepted
+  result; improvement requests compare candidates with that baseline instead of silently
+  accepting a regression. Every completed version gets a copyable `BT-###` id; paste one
+  into chat to branch from that exact archived code and result.
 - **Images.** Attach, paste, or drop up to 4 images (PNG/JPEG/WebP/GIF, 10 MB each) on a
   new strategy or a refinement — a chart to match, a table of weights, a screenshot. They're
   handed to Codex with `codex exec -i`, so the agent genuinely sees them. In chat an image
   with no text is a valid message; a new strategy still needs a prompt. (The mock agent
   stores and shows them but can't read them.)
-- **Compare.** The small toggle under the return overlays a dashed buy-and-hold curve for
-  the strategy's own underlying (QQQ for a QQQ strategy, else the broad market) on the same
-  axes. It's a plain price fetch — instant, no agent run.
+- **Compare.** Every successful response reassesses and stores a meaningful comparable
+  asset (for example, QQQ for a technology strategy). The server validates it against
+  that exact `BT-###` strategy and its available price history whenever the dashed
+  buy-and-hold line loads—including while viewing an older version. It is shown by
+  default and can be hidden with the small toggle under the return.
 - **Enforced realism.** Every real backtest uses adjusted (total-return) prices, applies
   transaction costs + slippage, models short borrow, and avoids lookahead / survivorship
   bias. See [`PROTOCOL.md`](PROTOCOL.md) §5 and [`docker/AGENTS.md`](docker/AGENTS.md).
@@ -104,6 +113,15 @@ Browser (React)  ──HTTP──▶  Next.js API routes  ──▶  Run manager
   visitors can reach exactly one thing — a static, read-only, no-JavaScript HTML page for
   the shared strategy. `proxy.ts` 404s everything else (the app, the API, all assets) for
   any request that arrives through a tunnel. Revoking the share kills the link instantly.
+- **Activation.** Activate a finished strategy and it becomes a live signal feed: its
+  saved code is re-executed on a schedule derived from the strategy itself (asset class +
+  rebalance frequency — no LLM involved), and when the target positions change on the
+  latest bar you get a text with the BUY/SELL deltas. Delivery is pluggable via
+  `HINDSIGHT_SIGNAL_PROVIDER` (see `.env.example`): a self-hosted Signal bot
+  (`signal`, recommended — messages arrive as a real conversation from a dedicated
+  number), Apple Messages via `osascript` (`imessage`, default), a Poke.com key, or a
+  generic webhook bridge. `HINDSIGHT_SIGNAL_PHONE` sets the default recipient. Still
+  simulation output — nothing is traded.
 
 ## Configuration
 
@@ -116,6 +134,13 @@ Copy `.env.example` → `.env` and adjust:
 | `HINDSIGHT_CODEX_HOME` | `~/.codex` | Codex auth mounted (read-only) into the container |
 | `HINDSIGHT_CODEX_MODEL` | `gpt-5.6-sol` | model passed to `codex exec -m` |
 | `HINDSIGHT_DATA_DIR` | `./data` | session store + per-session workdirs |
+| `HINDSIGHT_SIGNAL_PROVIDER` | `imessage` | signal delivery: `imessage`, `signal`, `poke`, or `webhook` |
+| `HINDSIGHT_SIGNAL_PHONE` | — | default recipient (E.164) for buy/sell signal messages |
+| `HINDSIGHT_SIGNAL_CLI_URL` | — | `signal` provider: base URL of the signal-cli-rest-api service |
+| `HINDSIGHT_SIGNAL_SENDER` | — | `signal` provider: bot number (E.164) messages are sent from |
+| `HINDSIGHT_SIGNAL_CLI_AUTH` | — | `signal` provider: optional `Authorization` header value |
+| `HINDSIGHT_POKE_API_KEY` | — | API key for the `poke` provider |
+| `HINDSIGHT_SIGNAL_WEBHOOK_URL` | — | target URL for the `webhook` provider |
 | `HINDSIGHT_AUTH_USER` | *(unset)* | username for Basic auth — see [Hosting it on a domain](#hosting-it-on-a-domain) |
 | `HINDSIGHT_AUTH_PASSWORD` | *(unset)* | password for Basic auth; **both** must be set for auth to switch on |
 
@@ -158,6 +183,7 @@ lib/server/           Session store, run manager, and the agent layer
   agent/               mock runner, codex-in-Docker runner, prompt builder, mock curve
 docker/               Image + AGENTS.md + entrypoint for real Codex runs
 proxy.ts              Front door: tunnel gate locally, Basic auth when hosted
+scripts/dev.mjs       Dev launcher: prepares the agent image when needed, runs next dev
 scripts/seed.mjs      Seeds the three example strategies
 tests/                bun test specs, one file per module (+ shared fixtures)
 PROTOCOL.md           The binding API / SSE / agent-file contract
@@ -167,7 +193,7 @@ PROTOCOL.md           The binding API / SSE / agent-file contract
 
 | Command | Description |
 |---------|-------------|
-| `bun run dev` | Dev server |
+| `bun run dev` | Prepare the agent image when needed, then start the dev server |
 | `bun run build` / `bun run start` | Production build + serve |
 | `bun run typecheck` | `tsc --noEmit` |
 | `bun run lint` | ESLint |

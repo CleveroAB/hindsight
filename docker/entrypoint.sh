@@ -95,8 +95,9 @@ case "${HS_KIND:-initial}" in
     fi
 
     # NOTE: `codex exec` takes exactly ONE positional (the prompt); the working
-    # root is set with -C/--cd. Passing a trailing path here is an arg-parse
-    # error (`unexpected argument '.'`, exit 2), so don't.
+    # root is set with -C/--cd. `-i/--image` accepts one or more values, so `--`
+    # must end option parsing before the prompt. Without it, an attached image
+    # makes the image option consume the prompt and Codex falls back to stdin.
     # stdin is redirected from /dev/null: with a prompt argument present, Codex
     # otherwise waits on / appends piped stdin ("Reading additional input from
     # stdin...") which is never supplied in a detached container run.
@@ -104,6 +105,6 @@ case "${HS_KIND:-initial}" in
       -m "${HS_MODEL:-gpt-5.6-sol}" \
       ${effort_args[@]+"${effort_args[@]}"} \
       ${image_args[@]+"${image_args[@]}"} \
-      "${HS_PROMPT:-}" < /dev/null
+      -- "${HS_PROMPT:-}" < /dev/null
     ;;
 esac

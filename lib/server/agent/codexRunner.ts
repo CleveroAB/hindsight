@@ -18,8 +18,8 @@
 //     rerun/refresh -> `python /work/strategy.py`
 //     initial/refine -> `codex exec --dangerously-bypass-approvals-and-sandbox -C /work
 //                        -m "$HS_MODEL" -c model_reasoning_effort="$HS_EFFORT" "$HS_PROMPT"`
-//   Model + effort come from the settings store (data/settings.json), which
-//   falls back to HINDSIGHT_CODEX_MODEL / built-in defaults.
+//   Model + effort are snapshotted from the settings store by the run manager
+//   (with a direct-call fallback here) so persisted provenance matches Codex.
 // ============================================================================
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -29,7 +29,7 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import type { AgentRunner, RunHandle, RunInput } from '@/lib/agent-runner';
 import { STATUS_WORDS } from '@/lib/agent-runner';
-import type { AgentEvent, EquityPoint, Period, StatusWord, StrategyResult } from '@/lib/types';
+import type { AgentEvent, EquityPoint, Period, PositionsPoint, StatusWord, StrategyResult } from '@/lib/types';
 import { hashSeed } from '@/lib/chart';
 import { getSettingsSync } from '@/lib/server/settings';
 import { buildCodexPrompt } from './prompt';
@@ -38,6 +38,8 @@ const DEFAULT_IMAGE = 'hindsight-agent:latest';
 const DEFAULT_CODEX_HOME = '~/.codex';
 const TAIL_INTERVAL_MS = 300;
 const LOG_TAIL_CHARS = 4000;
+/** Cap on the optional positions series — the most recent bars win (PROTOCOL §4). */
+const MAX_POSITIONS_POINTS = 750;
 
 // Monotonic counter for container-name uniqueness. Combined with a hash of the
 // session id, this stays unique across process restarts WITHOUT depending on
@@ -122,7 +124,11 @@ function toValue(v: unknown): number {
   return Number.NaN;
 }
 
-/** Convert a raw result.json shape into a canonical StrategyResult. */
+/**
+ * Convert a raw result.json shape into a canonical StrategyResult.
+ * Exported for the signals engine, which re-executes saved code in a scratch
+ * workdir and must read its result.json exactly the way a real run would.
+ */
 export function normalizeResultJson(
   raw: unknown,
   session: RunInput['session'],
@@ -131,7 +137,10 @@ export function normalizeResultJson(
 ): StrategyResult & { period?: Period } {
   const j = (raw ?? {}) as {
     equityCurve?: unknown;
+    positions?: unknown;
     benchmark?: unknown;
+    benchmarkTicker?: unknown;
+    benchmarkReason?: unknown;
     finalValue?: unknown;
     returnPct?: unknown;
     startingCapital?: unknown;
@@ -155,10 +164,48 @@ export function normalizeResultJson(
       .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   };
 
+  // Mirror of toPoints for the OPTIONAL positions series ([date, {TICK: w}]
+  // tuples or {date, weights} objects). Malformed entries are dropped, weights
+  // coerced to finite numbers under trimmed uppercase tickers, dates deduped
+  // keeping the last entry, sorted ascending, capped to the most recent bars.
+  const toPositions = (series: unknown): PositionsPoint[] => {
+    if (!Array.isArray(series)) return [];
+    const byDate = new Map<string, Record<string, number>>();
+    for (const item of series) {
+      let date = '';
+      let rawWeights: unknown;
+      if (Array.isArray(item) && item.length >= 2) {
+        date = String(item[0]);
+        rawWeights = item[1];
+      } else if (item && typeof item === 'object' && 'date' in item && 'weights' in item) {
+        const o = item as { date: unknown; weights: unknown };
+        date = String(o.date);
+        rawWeights = o.weights;
+      }
+      if (!date || !rawWeights || typeof rawWeights !== 'object' || Array.isArray(rawWeights)) {
+        continue;
+      }
+      const weights: Record<string, number> = {};
+      for (const [ticker, value] of Object.entries(rawWeights as Record<string, unknown>)) {
+        const symbol = ticker.trim().toUpperCase();
+        const weight = Number(value);
+        if (symbol && Number.isFinite(weight)) weights[symbol] = weight;
+      }
+      byDate.set(date, weights); // last entry for a date wins
+    }
+    return [...byDate.entries()]
+      .map(([date, weights]) => ({ date, weights }))
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+      .slice(-MAX_POSITIONS_POINTS);
+  };
+
   const equityCurve = toPoints(j.equityCurve);
   if (equityCurve.length === 0) {
     throw new Error('result.json has no usable equityCurve');
   }
+
+  // Optional bar-close target weights; absent/invalid means the field is omitted.
+  const positions = toPositions(j.positions);
 
   const startingCapital =
     typeof j.startingCapital === 'number' && Number.isFinite(j.startingCapital)
@@ -193,7 +240,17 @@ export function normalizeResultJson(
 
   const result: StrategyResult & { period?: Period } = {
     equityCurve,
+    ...(positions.length ? { positions } : {}),
     benchmark,
+    ...(typeof j.benchmarkTicker === 'string'
+      ? {
+          benchmarkTicker: j.benchmarkTicker.trim().toUpperCase(),
+          benchmarkSource: 'agent' as const,
+        }
+      : {}),
+    ...(typeof j.benchmarkReason === 'string'
+      ? { benchmarkReason: j.benchmarkReason.trim() }
+      : {}),
     finalValue: round2(finalValue),
     startingCapital,
     returnPct: round1(returnPct),
@@ -359,7 +416,13 @@ export class CodexRunner implements AgentRunner {
     // ---- build docker args --------------------------------------------------
     const args: string[] = ['run', '--rm', '--name', cname, '-e', `HS_KIND=${kind}`];
     if (kind === 'initial' || kind === 'refine') {
-      const { model, effort } = getSettingsSync();
+      // The run manager supplies one atomic settings snapshot so the values
+      // passed to Codex are exactly the ones persisted on the response. Keep a
+      // fallback for direct runner callers outside the manager.
+      const current = input.model && input.effort
+        ? { model: input.model, effort: input.effort }
+        : getSettingsSync();
+      const { model, effort } = current;
       const codexPrompt = buildCodexPrompt({ session, kind, message, attachments });
       // spawn() takes an argv array (no shell), so the prompt is a single, safely
       // quoted argument regardless of its content.

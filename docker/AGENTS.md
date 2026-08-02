@@ -16,7 +16,30 @@ capital given in `/work/params.json` (shape: `{"start":"YYYY-MM-DD","end":"YYYY-
 If you were invoked to **refine** an existing strategy, `/work/strategy.py`
 already exists from a prior run — read it first and edit it to satisfy the
 new instruction (the refinement text is in your prompt), rather than starting
-over, unless the request requires a rewrite.
+over, unless the request requires a rewrite. The invocation prompt includes the
+full conversation, not just the latest turn: preserve older user requirements
+unless a newer user message explicitly changes them. It also gives the accepted
+result as a baseline, backed up under `/work/baseline/`.
+
+Every successful run has a `BT-###` version id. When the current request names
+one, the server restores the FIRST named version into `/work/strategy.py`,
+`/work/result.json`, and `/work/baseline/`; work from that exact snapshot even
+if later responses exist. Exact files for every named version are also under
+`/work/versions/BT-###/`. Additional ids are comparison/material sources unless
+the user explicitly assigns them another role. Do not reapply changes that
+exist only in later versions merely because they appear later in the transcript.
+
+For a request to **improve**, **optimize**, or make a strategy **better**, do not
+accept the first plausible edit without measuring it. Run the candidate on the
+same inputs and compare the requested metric with the accepted baseline. If it
+regresses, try other principled variants without brute-force curve fitting. If
+the user references an older variant (such as "the original"), use its reported
+result from the conversation as an additional target rather than comparing only
+with an already-regressed latest run. If you cannot find a defensible
+improvement, restore `strategy.py` and `result.json` from `/work/baseline/` and
+explain honestly that the prior strategy was retained.
+Only the final accepted candidate should produce the final agent summary, and
+that summary must quantify its result beside the baseline.
 
 The user may attach **images** (a chart, a screenshot of a table, a photo of a
 sketch). They are passed to you directly and also saved under `/work/uploads/`;
@@ -105,6 +128,9 @@ When the backtest has actually run to completion, write `/work/result.json`
   "finalValue": 30642.05,
   "returnPct": 206.4,
   "equityCurve": [["2016-01-04", 10000.0], ["2016-01-05", 10021.3]],
+  "positions": [["2016-01-04", {"SPY": 0.6, "TLT": 0.4}], ["2016-01-05", {"SPY": 1.0}]],
+  "benchmarkTicker": "SPY",
+  "benchmarkReason": "SPY is the liquid broad-market proxy for this US large-cap strategy.",
   "benchmark": null,
   "code": "<the full contents of strategy.py as a string>",
   "period": {"start": "2016-01-01", "end": "2025-12-31"}
@@ -119,8 +145,24 @@ Notes:
   meaning (e.g. `206.4`, `-23.8`) — the runner will recompute/validate this
   from the curve if it's missing or inconsistent, so get it right but don't
   panic if you're slightly off.
-- `benchmark` is optional — omit or set `null` unless you have a clean SPY
-  (or similar) buy-and-hold overlay ready; don't force one.
+- `positions` is **optional**: `[isoDate, {"TICKER": weight, ...}]` tuples,
+  ascending by date — the target portfolio weights the strategy actually
+  **holds** as of that bar's close, after acting on that bar's signals. Each
+  weight is a fraction of portfolio value (`0.5` = half the book); cash is
+  implied by a sum below 1; negative weights mean shorts. Cap the array to the
+  ~750 most recent bars. Include it whenever your strategy can state its target
+  book (it lets later runs diff holdings bar to bar); omit it rather than
+  fabricating weights you didn't simulate.
+- Reassess `benchmarkTicker` for the **final accepted strategy on every initial
+  run and refinement**. Choose one liquid, investable Yahoo-compatible symbol
+  that matches the actual asset class, geography, sector, and universe: the
+  traded asset itself for a single-instrument timing strategy, an appropriate
+  sector/index ETF for a focused basket, or a broad-market proxy only when no
+  closer comparison is defensible. `benchmarkReason` must briefly justify the
+  choice. Write both as constants into `strategy.py` so no-model date re-runs
+  reproduce them. The server independently validates the symbol and coverage.
+- `benchmark` is the optional precomputed curve — omit or set it to `null`.
+  The server fetches the validated `benchmarkTicker` curve itself.
 - `code` should be the literal source of `/work/strategy.py` you wrote, so
   the UI can show it verbatim.
 - If you cannot complete the backtest (bad data, infeasible strategy, etc.),
@@ -150,6 +192,9 @@ Every backtest you write MUST:
    available bar, never the same bar and never future data. If a signal's
    real-world availability is delayed (e.g. a call published after market
    close, or scraped news with a timestamp), respect that delay explicitly.
+   Likewise, a reported `positions` entry is the weights the strategy HOLDS
+   as of that bar's close, after acting on its signals — never a
+   not-yet-executed target.
 5. **Avoid survivorship bias**: if the strategy's universe implies stocks
    that may have been delisted/acquired during the period (e.g. "all S&P 500
    members over time", "penny stocks", "SPACs"), don't silently limit

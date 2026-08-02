@@ -10,9 +10,10 @@
 
 import { readFile, writeFile, rename, readdir, unlink, rm } from 'node:fs/promises';
 import { nanoid } from 'nanoid';
-import type { Attachment, ChatMessage, Period, Session } from '@/lib/types';
+import type { Attachment, ChatMessage, Period, Session, SignalCadence } from '@/lib/types';
+import { ensureBacktestHistory } from '@/lib/backtests';
 import { parsePeriodFromPrompt } from '@/lib/period';
-import { ensureDir, sessionFile, sessionsDir, workDir } from './paths';
+import { ensureDir, sessionFile, sessionsDir, signalWorkDir, workDir } from './paths';
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
@@ -28,6 +29,38 @@ function todayIso(): string {
 function defaultPeriod(): Period {
   const year = new Date().getFullYear();
   return { start: `${year - 10}-01-01`, end: todayIso() };
+}
+
+const SIGNAL_CADENCES: readonly SignalCadence[] = ['hourly', 'daily', 'weekly', 'monthly'];
+
+/**
+ * Defensively hydrate `activation` on read (same spirit as
+ * ensureBacktestHistory): a hand-edited or partially written value that is not
+ * an object carrying every required key is coerced to undefined (= inactive)
+ * rather than crashing the scheduler or the UI. Mutates and returns the session.
+ */
+function normalizeActivation(session: Session): Session {
+  const raw = session.activation as unknown;
+  if (raw == null) return session; // absent and explicit null both mean inactive
+  const a = raw as Record<string, unknown>;
+  const valid =
+    typeof raw === 'object' &&
+    typeof a.phone === 'string' &&
+    a.phone.trim() !== '' &&
+    typeof a.activatedAt === 'number' &&
+    SIGNAL_CADENCES.includes(a.cadence as SignalCadence) &&
+    typeof a.cadenceReason === 'string' &&
+    typeof a.nextCheckAt === 'number' &&
+    (a.lastCheckAt === null || typeof a.lastCheckAt === 'number') &&
+    (a.lastSignal === null || (typeof a.lastSignal === 'object' && a.lastSignal !== null)) &&
+    (a.lastError === null || typeof a.lastError === 'string');
+  if (!valid) delete session.activation;
+  return session;
+}
+
+/** All read-path hydration in one place. */
+function hydrateSession(raw: string): Session {
+  return normalizeActivation(ensureBacktestHistory(JSON.parse(raw) as Session));
 }
 
 /** Write a session JSON atomically: tmp file + rename (never a partial file). */
@@ -54,7 +87,7 @@ export async function listSessions(): Promise<Session[]> {
     const id = name.slice(0, -'.json'.length);
     try {
       const raw = await readFile(sessionFile(id), 'utf8');
-      sessions.push(JSON.parse(raw) as Session);
+      sessions.push(hydrateSession(raw));
     } catch {
       // Skip partial writes / corrupt files rather than break the whole list.
     }
@@ -67,7 +100,7 @@ export async function listSessions(): Promise<Session[]> {
 export async function getSession(id: string): Promise<Session | null> {
   try {
     const raw = await readFile(sessionFile(id), 'utf8');
-    return JSON.parse(raw) as Session;
+    return hydrateSession(raw);
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
     throw err;
@@ -76,6 +109,7 @@ export async function getSession(id: string): Promise<Session | null> {
 
 /** Persist a session, stamping `updatedAt`. Returns the same object. */
 export async function saveSession(session: Session): Promise<Session> {
+  ensureBacktestHistory(session);
   session.updatedAt = Date.now();
   await writeSessionAtomic(session);
   return session;
@@ -129,6 +163,7 @@ export async function createSession(input: CreateSessionInput): Promise<Session>
         createdAt: now,
       },
     ],
+    backtests: [],
     dataSnapshotAt: null,
     createdAt: now,
     updatedAt: now,
@@ -148,7 +183,7 @@ export async function findSessionByShareToken(token: string): Promise<Session | 
   return sessions.find((s) => s.shareToken === token) ?? null;
 }
 
-/** Delete a session file and its working directory. */
+/** Delete a session file, its working directory, and any signal scratch dir. */
 export async function deleteSession(id: string): Promise<void> {
   try {
     await unlink(sessionFile(id));
@@ -156,6 +191,7 @@ export async function deleteSession(id: string): Promise<void> {
     if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
   }
   await rm(workDir(id), { recursive: true, force: true });
+  await rm(signalWorkDir(id), { recursive: true, force: true });
 }
 
 /** Append a chat message to a session and persist. Null if the session is gone. */

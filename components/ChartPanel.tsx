@@ -4,29 +4,43 @@
 // tooltip) and the Compare toggle on the left, strategy name + meta line on the
 // right; the hero equity chart anchored to the bottom of the flexible area with
 // year ticks under it; then the Period row above a hairline. While a re-run is
-// in flight the chart shimmers.
+// in flight the whole panel shimmers.
 //
-// Compare overlays a buy-and-hold curve for the strategy's own underlying (QQQ
-// for a QQQ strategy), fetched on demand from /benchmark — no agent run. The
-// dashed overlay is shown only while the toggle is on; it is dropped whenever
-// the period or the result changes, then re-fetched for the new window.
+// Compare overlays the validated buy-and-hold benchmark saved/reassessed for
+// the exact backtest version being presented. Price data comes from /benchmark
+// without another agent run. The comparison starts enabled and can be hidden.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { BenchmarkResponse, Period, Session } from '@/lib/types';
+import type { BacktestVersion, BenchmarkResponse, Period, Session, StrategyResult } from '@/lib/types';
 import { alignToDates } from '@/lib/chart';
 import { getBenchmark } from '@/lib/client/api';
-import { formatChangeLine, formatMetaLine, formatMoney, yearOf } from '@/lib/format';
+import {
+  formatChangeLine,
+  formatDatePill,
+  formatMetaLine,
+  formatMoney,
+  formatSignedPercent,
+  yearOf,
+} from '@/lib/format';
+import ActivateControl from './ActivateControl';
 import CompareToggle from './CompareToggle';
 import EquityChart from './EquityChart';
 import InfoTooltip from './InfoTooltip';
 import PeriodRow from './PeriodRow';
 import ShareControl from './ShareControl';
+import StrategyExplanation from './StrategyExplanation';
 
 export interface ChartPanelProps {
   session: Session;
+  /** Older version selected via the chat's eye control; null = latest result. */
+  viewedBacktest?: BacktestVersion | null;
+  /** Return to presenting the latest result. */
+  onShowLatest?: () => void;
   isRerunning: boolean;
   onRerun: (period: Period) => void;
   onRefresh: () => void;
+  /** Push an activate/deactivate response Session into page state (chat note). */
+  onSessionChange?: (session: Session) => void;
 }
 
 /**
@@ -53,17 +67,80 @@ function yearTicks(start: string, end: string): Array<{ year: number; frac: numb
   return ticks;
 }
 
-export default function ChartPanel({ session, isRerunning, onRerun, onRefresh }: ChartPanelProps) {
-  const result = session.result;
+/**
+ * Annualized return in percent over the equity curve's actual traded span
+ * (which can be shorter than the requested period). Null when the curve is too
+ * short or the values can't support a geometric rate.
+ */
+function cagrPct(result: StrategyResult): number | null {
+  const curve = result.equityCurve;
+  if (curve.length < 2) return null;
+  const years =
+    (Date.parse(curve[curve.length - 1].date) - Date.parse(curve[0].date)) /
+    (365.25 * 24 * 60 * 60 * 1000);
+  if (!Number.isFinite(years) || years <= 0) return null;
+  if (result.startingCapital <= 0 || result.finalValue <= 0) return null;
+  return ((result.finalValue / result.startingCapital) ** (1 / years) - 1) * 100;
+}
 
-  const [compareOn, setCompareOn] = useState(false);
+export default function ChartPanel({
+  session,
+  viewedBacktest = null,
+  onShowLatest,
+  isRerunning,
+  onRerun,
+  onRefresh,
+  onSessionChange,
+}: ChartPanelProps) {
+  // Everything displayed comes from the presented snapshot: an older version
+  // selected via the chat's eye control, or the session's latest result.
+  const result = viewedBacktest ? viewedBacktest.result : session.result;
+  const period = viewedBacktest ? viewedBacktest.period : session.period;
+  const name = viewedBacktest ? viewedBacktest.name : session.name;
+  const description = viewedBacktest ? viewedBacktest.description : session.description;
+  const presentedBacktest = useMemo(() => {
+    if (viewedBacktest) return viewedBacktest;
+    if (!session.result) return null;
+    return (
+      [...session.backtests].reverse().find((version) => version.result.ranAt === session.result?.ranAt) ??
+      session.backtests[session.backtests.length - 1] ??
+      null
+    );
+  }, [viewedBacktest, session.backtests, session.result]);
+  const detailedExplanation = useMemo(() => {
+    const exact = presentedBacktest?.messageId
+      ? session.chat.find(
+          (message) => message.id === presentedBacktest.messageId && message.role === 'agent',
+        )
+      : null;
+    const tagged = presentedBacktest
+      ? [...session.chat]
+          .reverse()
+          .find(
+            (message) =>
+              message.role === 'agent' && message.metadata?.backtestId === presentedBacktest.id,
+          )
+      : null;
+    const latestDetailed = [...session.chat]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === 'agent' &&
+          message.text.trim().length > 0 &&
+          !message.text.trimStart().toLowerCase().startsWith('agent exited'),
+      );
+    return exact?.text ?? tagged?.text ?? latestDetailed?.text ?? description ?? session.prompt;
+  }, [presentedBacktest, session.chat, session.prompt, description]);
+
+  const [compareOn, setCompareOn] = useState(true);
   const [benchmark, setBenchmark] = useState<BenchmarkResponse | null>(null);
   const [benchmarkLoading, setBenchmarkLoading] = useState(false);
   const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
 
   const { id: sessionId } = session;
-  const { start: periodStart, end: periodEnd } = session.period;
+  const { start: periodStart, end: periodEnd } = period;
   const ranAt = result?.ranAt ?? null;
+  const comparisonBacktestId = presentedBacktest?.id;
 
   // A loaded benchmark belongs to one window + one run; anything that moves
   // either invalidates it (the fetch effect below then reloads it if compare is
@@ -71,13 +148,13 @@ export default function ChartPanel({ session, isRerunning, onRerun, onRefresh }:
   useEffect(() => {
     setBenchmark(null);
     setBenchmarkError(null);
-  }, [sessionId, periodStart, periodEnd, ranAt]);
+  }, [sessionId, comparisonBacktestId, periodStart, periodEnd, ranAt]);
 
   useEffect(() => {
     if (!compareOn || benchmark || benchmarkError) return;
     let cancelled = false;
     setBenchmarkLoading(true);
-    getBenchmark(sessionId)
+    getBenchmark(sessionId, { backtestId: comparisonBacktestId })
       .then((data) => {
         if (!cancelled) setBenchmark(data);
       })
@@ -92,34 +169,33 @@ export default function ChartPanel({ session, isRerunning, onRerun, onRefresh }:
     return () => {
       cancelled = true;
     };
-  }, [compareOn, benchmark, benchmarkError, sessionId]);
+  }, [compareOn, benchmark, benchmarkError, sessionId, comparisonBacktestId]);
 
-  // Off → on always clears a previous failure, so the button doubles as retry.
+  // Always discard the loaded comparison when toggling. Re-enabling then asks
+  // the server for the benchmark selected from the latest strategy metadata.
   const toggleCompare = useCallback(() => {
-    setCompareOn((on) => {
-      if (!on) setBenchmarkError(null);
-      return !on;
-    });
+    setBenchmark(null);
+    setBenchmarkError(null);
+    setCompareOn((on) => !on);
   }, []);
 
   const values = useMemo(
     () => (result ? result.equityCurve.map((p) => p.value) : []),
     [result],
   );
-  // Resampled onto the strategy's own trading days so both lines share an x-axis.
+  // Resampled onto the strategy's own trading days so both lines share an
+  // x-axis. The endpoint resolves the benchmark against this exact version.
   const benchmarkValues = useMemo(() => {
     if (!compareOn || !benchmark || !result) return null;
     return alignToDates(result.equityCurve.map((p) => p.date), benchmark.curve);
   }, [compareOn, benchmark, result]);
-  const ticks = useMemo(
-    () => yearTicks(session.period.start, session.period.end),
-    [session.period.start, session.period.end],
-  );
+  const ticks = useMemo(() => yearTicks(period.start, period.end), [period.start, period.end]);
 
   const positive = (result?.returnPct ?? 0) >= 0;
 
   return (
     <div
+      className={isRerunning ? 'hs-shimmer' : undefined}
       style={{
         flex: 1,
         display: 'flex',
@@ -149,13 +225,18 @@ export default function ChartPanel({ session, isRerunning, onRerun, onRefresh }:
                 >
                   {formatChangeLine(result.finalValue, result.startingCapital, result.returnPct)}
                 </div>
-                <InfoTooltip start={result.startingCapital} final={result.finalValue} />
+                <InfoTooltip
+                  start={result.startingCapital}
+                  final={result.finalValue}
+                  cagrPct={cagrPct(result)}
+                />
               </div>
               <CompareToggle
                 active={compareOn}
                 loading={benchmarkLoading}
                 ticker={benchmark?.ticker ?? null}
                 returnPct={benchmark?.returnPct ?? null}
+                reason={benchmark?.reason ?? null}
                 error={benchmarkError}
                 disabled={isRerunning}
                 onToggle={toggleCompare}
@@ -165,12 +246,76 @@ export default function ChartPanel({ session, isRerunning, onRerun, onRefresh }:
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
-            {session.name || 'Untitled strategy'}
+            {name || 'Untitled strategy'}
           </div>
           <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 2 }}>
-            {formatMetaLine(session.period.start, session.period.end, session.startingCapital)}
+            {formatMetaLine(
+              period.start,
+              period.end,
+              viewedBacktest ? viewedBacktest.startingCapital : session.startingCapital,
+            )}
           </div>
-          <ShareControl sessionId={session.id} shareToken={session.shareToken} />
+          {viewedBacktest && (
+            <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
+              Viewing {viewedBacktest.id}
+              {onShowLatest && (
+                <>
+                  {' · '}
+                  <button
+                    type="button"
+                    onClick={onShowLatest}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      font: 'inherit',
+                      color: 'var(--text)',
+                      cursor: 'pointer',
+                      textDecoration: 'underline',
+                      textUnderlineOffset: 3,
+                    }}
+                  >
+                    show latest
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              gap: 8,
+              marginTop: 8,
+            }}
+          >
+            <StrategyExplanation
+              name={name || 'Untitled strategy'}
+              summary={description || 'No short strategy summary is available.'}
+              details={detailedExplanation}
+              snapshot={
+                result
+                  ? `${formatDatePill(period.start)} – ${formatDatePill(period.end)} · ${formatMoney(result.startingCapital)} → ${formatMoney(result.finalValue)} · ${formatSignedPercent(result.returnPct)} total return`
+                  : `${formatDatePill(period.start)} – ${formatDatePill(period.end)}`
+              }
+              versionLabel={presentedBacktest?.id}
+            />
+            <span aria-hidden="true" style={{ fontSize: 12, color: 'var(--faint)' }}>
+              |
+            </span>
+            <ShareControl sessionId={session.id} shareToken={session.shareToken} />
+            <span aria-hidden="true" style={{ fontSize: 12, color: 'var(--faint)' }}>
+              |
+            </span>
+            <ActivateControl
+              sessionId={session.id}
+              activation={session.activation}
+              // Every activation route 409s while a run is in flight.
+              disabled={isRerunning}
+              onSessionChange={onSessionChange}
+            />
+          </div>
         </div>
       </div>
 
@@ -186,13 +331,11 @@ export default function ChartPanel({ session, isRerunning, onRerun, onRefresh }:
       >
         {result ? (
           <>
-            <div className={isRerunning ? 'hs-shimmer' : undefined}>
-              <EquityChart
-                values={values}
-                returnPct={result.returnPct}
-                benchmark={benchmarkValues}
-              />
-            </div>
+            <EquityChart
+              values={values}
+              returnPct={result.returnPct}
+              benchmark={benchmarkValues}
+            />
             <div
               className="num"
               style={{
