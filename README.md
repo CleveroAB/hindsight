@@ -134,6 +134,13 @@ Copy `.env.example` → `.env` and adjust:
 | `HINDSIGHT_CODEX_HOME` | `~/.codex` | Codex auth mounted (read-only) into the container |
 | `HINDSIGHT_CODEX_MODEL` | `gpt-5.6-sol` | model passed to `codex exec -m` |
 | `HINDSIGHT_DATA_DIR` | `./data` | session store + per-session workdirs |
+| `HINDSIGHT_SIGNAL_PROVIDER` | `imessage` | signal delivery: `imessage`, `signal`, `poke`, or `webhook` |
+| `HINDSIGHT_SIGNAL_PHONE` | — | default recipient (E.164) for buy/sell signal messages |
+| `HINDSIGHT_SIGNAL_CLI_URL` | — | `signal` provider: base URL of the signal-cli-rest-api service |
+| `HINDSIGHT_SIGNAL_SENDER` | — | `signal` provider: bot number (E.164) messages are sent from |
+| `HINDSIGHT_SIGNAL_CLI_AUTH` | — | `signal` provider: optional `Authorization` header value |
+| `HINDSIGHT_POKE_API_KEY` | — | API key for the `poke` provider |
+| `HINDSIGHT_SIGNAL_WEBHOOK_URL` | — | target URL for the `webhook` provider |
 | `HINDSIGHT_AUTH_USER` | *(unset)* | username for Basic auth — see [Hosting it on a domain](#hosting-it-on-a-domain) |
 | `HINDSIGHT_AUTH_PASSWORD` | *(unset)* | password for Basic auth; **both** must be set for auth to switch on |
 
@@ -176,6 +183,7 @@ lib/server/           Session store, run manager, and the agent layer
   agent/               mock runner, codex-in-Docker runner, prompt builder, mock curve
 docker/               Image + AGENTS.md + entrypoint for real Codex runs
 proxy.ts              Front door: tunnel gate locally, Basic auth when hosted
+scripts/dev.mjs       Dev launcher: prepares the agent image when needed, runs next dev
 scripts/seed.mjs      Seeds the three example strategies
 tests/                bun test specs, one file per module (+ shared fixtures)
 PROTOCOL.md           The binding API / SSE / agent-file contract

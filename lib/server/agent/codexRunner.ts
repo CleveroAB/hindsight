@@ -68,10 +68,6 @@ function round1(n: number): number {
 }
 
 /**
- * Convert a raw result.json shape into a canonical StrategyResult.
- * Exported for the signals engine, which re-executes saved code in a scratch
- * workdir and must read its result.json exactly the way a real run would.
- */
  * Parse one `events.ndjson` line into the AgentEvent it stands for, or null if
  * the line is unusable (PROTOCOL §3). Pure — the caller stamps `elapsedMs` on
  * `status`, since the runner is authoritative on elapsed time.
@@ -128,7 +124,11 @@ function toValue(v: unknown): number {
   return Number.NaN;
 }
 
-/** Convert a raw result.json shape into a canonical StrategyResult. */
+/**
+ * Convert a raw result.json shape into a canonical StrategyResult.
+ * Exported for the signals engine, which re-executes saved code in a scratch
+ * workdir and must read its result.json exactly the way a real run would.
+ */
 export function normalizeResultJson(
   raw: unknown,
   session: RunInput['session'],
