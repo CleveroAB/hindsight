@@ -5,12 +5,15 @@
 // button, and the caption. Enter submits; Shift+Enter inserts a newline.
 //
 // Images can be attached here the same way as in the chat (paperclip, paste, or
-// drop) — a strategy is often easiest to state by showing a chart.
+// drop) — a strategy is often easiest to state by showing a chart. A strategy
+// can also be dictated: the mic button streams speech into the textarea.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { appendTranscript, useDictation } from '@/lib/client/useDictation';
 import { useImageDrafts } from '@/lib/client/useImageDrafts';
 import AttachButton from './AttachButton';
 import ImageDraftStrip from './ImageDraftStrip';
+import MicButton from './MicButton';
 
 const PLACEHOLDER =
   'Describe a strategy and a period. “Buy QQQ when RSI dips below 30, sell above 70, 2016–2025.”';
@@ -51,6 +54,17 @@ export default function EmptyComposer({
     el.style.height = `${el.scrollHeight}px`;
   }, []);
 
+  const dictation = useDictation(
+    useCallback(
+      (text: string) => {
+        setValue((v) => appendTranscript(v, text));
+        requestAnimationFrame(resize);
+      },
+      [resize],
+    ),
+    blocked || busy,
+  );
+
   useEffect(() => {
     resize();
     if (!blocked) textareaRef.current?.focus();
@@ -61,6 +75,7 @@ export default function EmptyComposer({
     // Unlike the chat, a strategy needs words: an image alone doesn't say what
     // period to test or what to do with what it shows.
     if (!prompt || busy || blocked) return;
+    dictation.stop();
     // Deliberately NOT clearing the drafts: a failed create leaves this
     // composer on screen, and re-picking the images would be infuriating. A
     // successful one navigates away, and unmount revokes the previews.
@@ -159,8 +174,33 @@ export default function EmptyComposer({
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <AttachButton onFiles={images.addFiles} disabled={blocked} size={28} />
+          {dictation.supported && (
+            <MicButton
+              listening={dictation.listening}
+              onToggle={dictation.toggle}
+              disabled={blocked}
+              size={28}
+            />
+          )}
           {blocked ? (
             <div style={{ fontSize: 12, color: 'var(--red)', lineHeight: 1.5 }}>{blockedReason}</div>
+          ) : dictation.error ? (
+            <div style={{ fontSize: 12, color: 'var(--red)', lineHeight: 1.5 }}>
+              {dictation.error}
+            </div>
+          ) : dictation.listening ? (
+            <div
+              style={{
+                fontSize: 12,
+                color: 'var(--muted)',
+                lineHeight: 1.5,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {dictation.interim || 'Listening…'}
+            </div>
           ) : (
             <div style={{ fontSize: 12, color: 'var(--faint)' }}>
               Enter to run · Shift+Enter for a new line
