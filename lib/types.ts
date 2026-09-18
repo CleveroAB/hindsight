@@ -450,7 +450,7 @@ export interface SignalCheckResponse {
 // ---------------------------------------------------------------------------
 
 /** Models offered in the settings dialog; the value goes to `codex exec -m`. */
-export const CODEX_MODELS = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'] as const;
+export const CODEX_MODELS = ['gpt-5.6-sol', 'gpt-5.6-astra', 'gpt-5.6-luna'] as const;
 export type CodexModel = (typeof CODEX_MODELS)[number];
 
 /** Reasoning-effort levels Codex accepts (`model_reasoning_effort`). */

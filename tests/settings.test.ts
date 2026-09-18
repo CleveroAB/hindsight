@@ -52,8 +52,8 @@ describe('defaults', () => {
 
   test('settings.json out-ranks the env var', async () => {
     process.env.HINDSIGHT_CODEX_MODEL = 'gpt-5.6-luna';
-    await updateSettings({ model: 'gpt-5.6-terra' });
-    expect((await getSettings()).model).toBe('gpt-5.6-terra');
+    await updateSettings({ model: 'gpt-5.6-astra' });
+    expect((await getSettings()).model).toBe('gpt-5.6-astra');
   });
 
   test('the file lives at ${data}/settings.json', () => {
@@ -88,8 +88,8 @@ describe('reading a hand-edited file', () => {
   });
 
   test('a model with stray whitespace is trimmed', async () => {
-    await writeRaw(JSON.stringify({ model: '  gpt-5.6-terra  ', effort: 'low' }));
-    expect((await getSettings()).model).toBe('gpt-5.6-terra');
+    await writeRaw(JSON.stringify({ model: '  gpt-5.6-astra  ', effort: 'low' }));
+    expect((await getSettings()).model).toBe('gpt-5.6-astra');
   });
 
   test('missing fields fall back individually', async () => {
@@ -108,9 +108,9 @@ describe('updateSettings', () => {
   });
 
   test('a partial patch leaves the other field alone', async () => {
-    await updateSettings({ model: 'gpt-5.6-terra', effort: 'max' });
+    await updateSettings({ model: 'gpt-5.6-astra', effort: 'max' });
     await updateSettings({ effort: 'minimal' });
-    expect(await getSettings()).toEqual({ model: 'gpt-5.6-terra', effort: 'minimal' });
+    expect(await getSettings()).toEqual({ model: 'gpt-5.6-astra', effort: 'minimal' });
   });
 
   test('an empty patch is a no-op that still round-trips', async () => {
@@ -129,7 +129,7 @@ describe('updateSettings', () => {
 
 describe('getSettingsSync', () => {
   test('agrees with the async reader', async () => {
-    await updateSettings({ model: 'gpt-5.6-terra', effort: 'high' });
+    await updateSettings({ model: 'gpt-5.6-astra', effort: 'high' });
     expect(getSettingsSync()).toEqual(await getSettings());
   });
 

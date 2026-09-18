@@ -19,7 +19,7 @@ import { getAgentHealth, getSettings, updateSettings } from '@/lib/client/api';
 // with the full model id muted beside it.
 const MODEL_OPTIONS: { value: (typeof CODEX_MODELS)[number]; label: string; description: string }[] = [
   { value: 'gpt-5.6-sol', label: 'Sol', description: 'gpt-5.6-sol — default' },
-  { value: 'gpt-5.6-terra', label: 'Terra', description: 'gpt-5.6-terra' },
+  { value: 'gpt-5.6-astra', label: 'Astra', description: 'gpt-5.6-astra' },
   { value: 'gpt-5.6-luna', label: 'Luna', description: 'gpt-5.6-luna' },
 ];
 
