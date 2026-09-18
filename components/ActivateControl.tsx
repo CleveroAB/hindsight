@@ -13,6 +13,7 @@
 // must never reach the strategy page's run-interrupt listener.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { usePopoverPlacement } from '@/lib/client/usePopoverPlacement';
 import type { Session, SignalUpdate, StrategyActivation } from '@/lib/types';
 import {
   activateSession,
@@ -73,6 +74,7 @@ export default function ActivateControl({
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const placement = usePopoverPlacement(open, wrapRef, { width: 320 });
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Don't let the flash reset fire into an unmounted component.
@@ -238,8 +240,7 @@ export default function ActivateControl({
           style={{
             position: 'absolute',
             top: 'calc(100% + 8px)',
-            right: 0,
-            width: 320,
+            ...placement,
             padding: '14px 16px',
             background: 'var(--surface)',
             border: '1px solid var(--border-chrome)',

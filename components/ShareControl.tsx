@@ -8,6 +8,7 @@
 // machine the popover says so instead of pretending the link is reachable.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { usePopoverPlacement } from '@/lib/client/usePopoverPlacement';
 import type { ShareInfo } from '@/lib/types';
 import { shareSession, unshareSession } from '@/lib/client/api';
 
@@ -25,6 +26,7 @@ export default function ShareControl({ sessionId, shareToken }: ShareControlProp
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const placement = usePopoverPlacement(open, wrapRef, { width: 320 });
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Don't let the "Copied" reset fire into an unmounted component.
@@ -152,8 +154,7 @@ export default function ShareControl({ sessionId, shareToken }: ShareControlProp
           style={{
             position: 'absolute',
             top: 'calc(100% + 8px)',
-            right: 0,
-            width: 320,
+            ...placement,
             padding: '14px 16px',
             background: 'var(--surface)',
             border: '1px solid var(--border-chrome)',

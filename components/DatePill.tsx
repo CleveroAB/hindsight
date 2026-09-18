@@ -18,9 +18,12 @@ export default function DatePill({ iso, onChange, disabled = false, ariaLabel }:
   const inputRef = useRef<HTMLInputElement>(null);
 
   return (
-    <span style={{ position: 'relative', display: 'inline-flex', opacity: disabled ? 0.55 : 1 }}>
+    <span
+      className="hs-period-pill"
+      style={{ position: 'relative', display: 'inline-flex', opacity: disabled ? 0.55 : 1 }}
+    >
       <span
-        className="num"
+        className="num hs-period-pill-label"
         style={{
           border: '1px solid var(--border-input)',
           background: 'var(--surface)',
