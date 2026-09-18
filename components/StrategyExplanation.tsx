@@ -4,7 +4,7 @@
 // the exact agent response associated with the currently presented backtest,
 // adds a concise summary + snapshot, and lets the whole explanation be copied.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import CopyToast from './CopyToast';
 
 export interface StrategyExplanationProps {
@@ -16,6 +16,10 @@ export interface StrategyExplanationProps {
 }
 
 type ToastState = 'copied' | 'error' | null;
+
+const PANEL_MAX_WIDTH = 440;
+/** Total horizontal breathing room the panel leaves on narrow screens. */
+const PANEL_VIEWPORT_GUTTER = 48;
 
 async function writeClipboard(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
@@ -44,6 +48,10 @@ export default function StrategyExplanation({
   versionLabel = null,
 }: StrategyExplanationProps) {
   const [open, setOpen] = useState(false);
+  // Which edge of the icon the panel hangs from. Right (growing leftward) on
+  // the desktop layout where the actions row is right-aligned; left on phones,
+  // where the row is left-aligned and a right-anchored panel leaves the screen.
+  const [anchor, setAnchor] = useState<'left' | 'right'>('right');
   const [toast, setToast] = useState<ToastState>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -54,6 +62,14 @@ export default function StrategyExplanation({
     },
     [],
   );
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const rect = wrapRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = Math.min(PANEL_MAX_WIDTH, window.innerWidth - PANEL_VIEWPORT_GUTTER);
+    setAnchor(rect.right - width >= 12 ? 'right' : 'left');
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -139,8 +155,8 @@ export default function StrategyExplanation({
           style={{
             position: 'absolute',
             top: '100%',
-            right: 0,
-            width: 'min(440px, calc(100vw - 48px))',
+            ...(anchor === 'right' ? { right: 0 } : { left: 0 }),
+            width: `min(${PANEL_MAX_WIDTH}px, calc(100vw - ${PANEL_VIEWPORT_GUTTER}px))`,
             paddingTop: 10,
             zIndex: 60,
           }}
