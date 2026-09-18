@@ -11,10 +11,15 @@
 import Link from 'next/link';
 import SettingsControl from './SettingsControl';
 import ThemeToggle from './ThemeToggle';
+import SignOutControl from './SignOutControl';
 
 export interface HeaderProps {
-  /** 'withBack' adds the bottom hairline and (absent `onBack`) a link home. */
-  variant: 'plain' | 'withBack';
+  /**
+   * 'withBack' adds the bottom hairline and (absent `onBack`) a link home.
+   * 'signedOut' is the sign-in page: wordmark and theme control only, since
+   * settings and sign-out need a session the visitor doesn't have yet.
+   */
+  variant: 'plain' | 'withBack' | 'signedOut';
   /** Renders the back affordance as a button running this instead of navigating. */
   onBack?: () => void;
 }
@@ -24,6 +29,7 @@ const backStyle = { fontSize: 13, color: 'var(--muted)' } as const;
 export default function Header({ variant, onBack }: HeaderProps) {
   return (
     <header
+      className="hs-app-header"
       style={{
         height: 64,
         flex: 'none',
@@ -34,7 +40,7 @@ export default function Header({ variant, onBack }: HeaderProps) {
         borderBottom: variant === 'withBack' ? '1px solid var(--hairline)' : 'none',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+      <div className="hs-header-left" style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
         <Link
           href="/"
           style={{
@@ -57,7 +63,12 @@ export default function Header({ variant, onBack }: HeaderProps) {
         ) : null}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <SettingsControl />
+        {variant !== 'signedOut' && (
+          <>
+            <SignOutControl />
+            <SettingsControl />
+          </>
+        )}
         <ThemeToggle />
       </div>
     </header>
