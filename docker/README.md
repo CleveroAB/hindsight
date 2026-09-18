@@ -41,7 +41,7 @@ For every run (`initial`, `refine`, `rerun`, `refresh`) the agent layer's
 ```sh
 docker run --rm --name hindsight-<sessionId>-<runId> \
   -e HS_KIND=<initial|refine|rerun|refresh> \
-  -e HS_MODEL=<codex model, e.g. gpt-5.6-sol>   \  # initial/refine only
+  -e HS_MODEL=<codex model, e.g. gpt-5.6-astra>   \  # initial/refine only
   -e HS_EFFORT=<reasoning effort, e.g. medium>  \  # initial/refine only
   -e HS_PROMPT="<the user's prompt or refinement text>" \  # initial/refine only
   -e HS_IMAGES="<newline-separated /work/uploads/* paths>" \  # only when images are attached

@@ -132,7 +132,7 @@ Copy `.env.example` → `.env` and adjust:
 | `HINDSIGHT_AGENT` | `mock` | `mock` or `codex` |
 | `HINDSIGHT_DOCKER_IMAGE` | `hindsight-agent:latest` | image for real runs |
 | `HINDSIGHT_CODEX_HOME` | `~/.codex` | Codex auth mounted (read-only) into the container |
-| `HINDSIGHT_CODEX_MODEL` | `gpt-5.6-sol` | model passed to `codex exec -m` |
+| `HINDSIGHT_CODEX_MODEL` | `gpt-5.6-astra` | model passed to `codex exec -m` |
 | `HINDSIGHT_DATA_DIR` | `./data` | session store + per-session workdirs |
 | `HINDSIGHT_SIGNAL_PROVIDER` | `imessage` | signal delivery: `imessage`, `signal`, `poke`, or `webhook` |
 | `HINDSIGHT_SIGNAL_PHONE` | — | default recipient (E.164) for buy/sell signal messages |
@@ -145,6 +145,48 @@ Copy `.env.example` → `.env` and adjust:
 | `HINDSIGHT_AUTH_PASSWORD` | *(unset)* | password for Basic auth; **both** must be set for auth to switch on |
 
 ## Hosting it on a domain
+
+### Private email-code sign-in
+
+For a private hosted workspace, Hindsight supports an eight-digit email code
+delivered with Resend. Only `HINDSIGHT_AUTH_EMAIL` can sign in; other addresses
+cannot create accounts. This remains a single-owner workspace, not a multi-user app.
+
+Configure these server-side variables (never commit their real values):
+
+```dotenv
+HINDSIGHT_AUTH_MODE=email
+HINDSIGHT_AUTH_EMAIL=carl@clevero.se
+HINDSIGHT_AUTH_URL=https://app.hindsight.build
+HINDSIGHT_AUTH_SECRET=<random secret of at least 32 characters>
+HINDSIGHT_AUTH_FROM="Hindsight <mail@send.clevero.se>"
+RESEND_API_KEY=<Resend sending key>
+```
+
+The sender must be authorized in your Resend account. Generate the authentication
+secret with `openssl rand -hex 32`. `HINDSIGHT_AUTH_URL` must be the exact HTTPS
+origin; local development also permits HTTP on localhost. The server sends codes
+only to the configured owner. Codes expire after ten minutes, allow five attempts,
+and can only be used once, in the browser that requested them. Resending invalidates
+the previous code. Sending is limited to once a minute and five times an hour.
+
+Successful sign-in creates an HttpOnly session cookie valid for seven days. The
+header's **Sign out** button revokes that session immediately. Changing the owner
+email or rotating the authentication secret invalidates existing sessions. Auth
+state is persisted under `HINDSIGHT_DATA_DIR/auth` using atomic writes and file
+locking; persist this directory with the rest of the data, outside sandbox mounts.
+
+Email mode takes precedence over the Basic password, including if both are set.
+Partial email authentication configuration blocks private routes rather than
+falling back to open access. All private APIs, streams, uploads, and app pages
+require a valid session. Deliberately shared `/share/<token>` read-only pages
+remain public. There is no sign-up page or registration endpoint.
+
+Before switching a running service, verify the sender/key and test the login flow
+on a separate instance. Do not remove the existing live authentication until email
+delivery works. See [the email sign-in deployment notes](docs/email-sign-in.md).
+
+### Legacy Basic password
 
 Hindsight is built to run locally, and out of the box it has no authentication — anyone
 who can reach it can spend your Codex credits. If you want it on a public domain anyway,

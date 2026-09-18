@@ -37,7 +37,7 @@ async function writeRaw(contents: string): Promise<void> {
 
 describe('defaults', () => {
   test('a missing file yields the built-in defaults', async () => {
-    expect(await getSettings()).toEqual({ model: 'gpt-5.6-sol', effort: 'medium' });
+    expect(await getSettings()).toEqual({ model: 'gpt-5.6-astra', effort: 'medium' });
   });
 
   test('HINDSIGHT_CODEX_MODEL supplies the default model', async () => {
@@ -47,7 +47,7 @@ describe('defaults', () => {
 
   test('an all-whitespace env var falls back to the built-in default', async () => {
     process.env.HINDSIGHT_CODEX_MODEL = '   ';
-    expect((await getSettings()).model).toBe('gpt-5.6-sol');
+    expect((await getSettings()).model).toBe('gpt-5.6-astra');
   });
 
   test('settings.json out-ranks the env var', async () => {
@@ -64,16 +64,16 @@ describe('defaults', () => {
 describe('reading a hand-edited file', () => {
   test('unparseable JSON degrades to defaults', async () => {
     await writeRaw('{ not json at all');
-    expect(await getSettings()).toEqual({ model: 'gpt-5.6-sol', effort: 'medium' });
+    expect(await getSettings()).toEqual({ model: 'gpt-5.6-astra', effort: 'medium' });
   });
 
   test('a non-object payload degrades to defaults', async () => {
     await writeRaw('"just a string"');
-    expect(await getSettings()).toEqual({ model: 'gpt-5.6-sol', effort: 'medium' });
+    expect(await getSettings()).toEqual({ model: 'gpt-5.6-astra', effort: 'medium' });
   });
 
   test('an unknown effort falls back rather than reaching codex exec', async () => {
-    await writeRaw(JSON.stringify({ model: 'gpt-5.6-sol', effort: 'ludicrous' }));
+    await writeRaw(JSON.stringify({ model: 'gpt-5.6-astra', effort: 'ludicrous' }));
     expect((await getSettings()).effort).toBe('medium');
   });
 
@@ -84,7 +84,7 @@ describe('reading a hand-edited file', () => {
 
   test('an empty model string is not a model', async () => {
     await writeRaw(JSON.stringify({ model: '   ', effort: 'high' }));
-    expect((await getSettings()).model).toBe('gpt-5.6-sol');
+    expect((await getSettings()).model).toBe('gpt-5.6-astra');
   });
 
   test('a model with stray whitespace is trimmed', async () => {
@@ -94,17 +94,17 @@ describe('reading a hand-edited file', () => {
 
   test('missing fields fall back individually', async () => {
     await writeRaw(JSON.stringify({ effort: 'xhigh' }));
-    expect(await getSettings()).toEqual({ model: 'gpt-5.6-sol', effort: 'xhigh' });
+    expect(await getSettings()).toEqual({ model: 'gpt-5.6-astra', effort: 'xhigh' });
   });
 });
 
 describe('updateSettings', () => {
   test('persists and returns the merged result', async () => {
     expect(await updateSettings({ effort: 'high' })).toEqual({
-      model: 'gpt-5.6-sol',
+      model: 'gpt-5.6-astra',
       effort: 'high',
     });
-    expect(await getSettings()).toEqual({ model: 'gpt-5.6-sol', effort: 'high' });
+    expect(await getSettings()).toEqual({ model: 'gpt-5.6-astra', effort: 'high' });
   });
 
   test('a partial patch leaves the other field alone', async () => {
@@ -134,6 +134,6 @@ describe('getSettingsSync', () => {
   });
 
   test('degrades to defaults with no file, since AgentRunner.start() cannot await', async () => {
-    expect(getSettingsSync()).toEqual({ model: 'gpt-5.6-sol', effort: 'medium' });
+    expect(getSettingsSync()).toEqual({ model: 'gpt-5.6-astra', effort: 'medium' });
   });
 });

@@ -5,7 +5,7 @@
 # Invoked as: entrypoint.sh   (no args; everything comes via env + /work mount)
 # Env:
 #   HS_KIND   - initial | refine | rerun | refresh   (required; defaults below)
-#   HS_MODEL  - codex model name (initial/refine only; defaults to gpt-5.6-sol)
+#   HS_MODEL  - codex model name (initial/refine only; defaults to gpt-5.6-astra)
 #   HS_EFFORT - codex reasoning effort (initial/refine only; when set, passed
 #               as `-c model_reasoning_effort=<value>`; else codex's default)
 #   HS_PROMPT - the user's strategy prompt / refinement text (initial/refine)
@@ -102,7 +102,7 @@ case "${HS_KIND:-initial}" in
     # otherwise waits on / appends piped stdin ("Reading additional input from
     # stdin...") which is never supplied in a detached container run.
     exec codex exec --dangerously-bypass-approvals-and-sandbox -C /work \
-      -m "${HS_MODEL:-gpt-5.6-sol}" \
+      -m "${HS_MODEL:-gpt-5.6-astra}" \
       ${effort_args[@]+"${effort_args[@]}"} \
       ${image_args[@]+"${image_args[@]}"} \
       -- "${HS_PROMPT:-}" < /dev/null

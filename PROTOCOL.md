@@ -235,7 +235,7 @@ LLM-backed endpoints (`POST /api/sessions`, `POST …/messages`) refuse with
 tmp-file + rename, like sessions). The run manager snapshots it at run start and
 the CodexRunner passes `HS_MODEL` / `HS_EFFORT` to the container; the entrypoint forwards them
 as `codex exec -m <model> -c model_reasoning_effort=<effort>`. With no settings
-file, the model defaults to `HINDSIGHT_CODEX_MODEL` (else `gpt-5.6-sol`) and
+file, the model defaults to `HINDSIGHT_CODEX_MODEL` (else `gpt-5.6-astra`) and
 the effort to `medium`. PUT accepts a partial body but only the values in
 `CODEX_MODELS` / `CODEX_EFFORTS` (400 otherwise); `rerun`/`refresh` never use
 either (no LLM). The mock runner ignores settings entirely.

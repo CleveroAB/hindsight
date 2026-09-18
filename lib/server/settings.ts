@@ -15,7 +15,7 @@ import { nanoid } from 'nanoid';
 import { CODEX_EFFORTS, type AppSettings, type UpdateSettingsBody } from '@/lib/types';
 import { dataDir, ensureDir } from './paths';
 
-const DEFAULT_MODEL = 'gpt-5.6-sol';
+const DEFAULT_MODEL = 'gpt-5.6-astra';
 const DEFAULT_EFFORT: AppSettings['effort'] = 'medium';
 
 /** `${data}/settings.json`. */
