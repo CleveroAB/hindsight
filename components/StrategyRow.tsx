@@ -82,6 +82,7 @@ export default function StrategyRow({ session, onDeleted }: StrategyRowProps) {
         }}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
+        className="hs-strategy-row"
         style={{
           display: 'grid',
           gridTemplateColumns: '1fr auto minmax(130px, 220px)',
@@ -96,7 +97,7 @@ export default function StrategyRow({ session, onDeleted }: StrategyRowProps) {
           outline: 'none',
         }}
       >
-        <div style={{ minWidth: 0 }}>
+        <div className="hs-strategy-row-name" style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
             <div
               style={{
@@ -142,6 +143,7 @@ export default function StrategyRow({ session, onDeleted }: StrategyRowProps) {
 
         {running ? (
           <div
+            className="hs-strategy-row-status"
             style={{
               gridColumn: '2 / 4',
               display: 'flex',
@@ -164,7 +166,7 @@ export default function StrategyRow({ session, onDeleted }: StrategyRowProps) {
           </div>
         ) : result ? (
           <>
-            <div style={{ textAlign: 'right' }}>
+            <div className="hs-strategy-row-value" style={{ textAlign: 'right' }}>
               <div className="num" style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)' }}>
                 {formatMoney(result.finalValue)}
               </div>
@@ -205,6 +207,7 @@ export default function StrategyRow({ session, onDeleted }: StrategyRowProps) {
           </>
         ) : (
           <div
+            className="hs-strategy-row-status"
             style={{
               gridColumn: '2 / 4',
               textAlign: 'right',

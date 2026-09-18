@@ -381,6 +381,28 @@ input {
     margin-right: 0 !important;
   }
 
+  /* Strategy list rows stack on phones: name and description on the first
+     line, then the value (left-aligned) beside the sparkline. The desktop
+     three-column grid squeezes the name column to nothing at this width. */
+  .hs-strategy-row {
+    grid-template-columns: 1fr minmax(130px, 160px) !important;
+    gap: 10px 20px !important;
+  }
+
+  .hs-strategy-row-name {
+    grid-column: 1 / -1;
+  }
+
+  .hs-strategy-row-value {
+    text-align: left !important;
+  }
+
+  .hs-strategy-row-status {
+    grid-column: 1 / -1 !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+  }
+
   /* The two date pills share the row with the dash and fill it edge to edge. */
   .hs-period-pill {
     flex: 1;
