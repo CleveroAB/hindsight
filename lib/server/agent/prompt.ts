@@ -117,6 +117,7 @@ function protocolBlock(session: Session): string {
     '- No lookahead: a signal formed at a bar close acts on the NEXT bar.',
     '- Avoid survivorship bias: include delisted names when the universe implies them; if data forces an approximation, say so.',
     '- Finish with a short, honest {"type":"message","role":"agent"} summary naming the rebalance cadence, the costs modeled, the headline return, and any data caveats.',
+    '- Format that summary for a narrow chat column, never as one wall of text: open with one or two plain sentences on what the strategy does, then short sections separated by blank lines ("\\n\\n" in the JSON text), each led by a **bold label** on its own line with "- " bullets under it — e.g. **Rules**, **Results (start–end)** (strategy vs baseline/benchmark, one figure per bullet), **Assumptions**, **Caveats**. One fact per bullet, no Markdown headings, tables, or links.',
   ].join('\n');
 }
 
