@@ -5,7 +5,9 @@
 // adds a concise summary + snapshot, and lets the whole explanation be copied.
 
 import { useEffect, useRef, useState } from 'react';
+import { richTextToPlain } from '@/lib/richText';
 import CopyToast from './CopyToast';
+import RichText from './RichText';
 
 export interface StrategyExplanationProps {
   name: string;
@@ -83,7 +85,7 @@ export default function StrategyExplanation({
 
   const copyExplanation = async () => {
     const sections = [name, summary];
-    if (details !== summary) sections.push(details);
+    if (details !== summary) sections.push(richTextToPlain(details));
     sections.push(`${versionLabel ? `${versionLabel} · ` : ''}${snapshot}`);
 
     try {
@@ -230,10 +232,9 @@ export default function StrategyExplanation({
                 lineHeight: 1.62,
                 color: 'var(--muted)',
                 marginTop: 6,
-                whiteSpace: 'pre-wrap',
               }}
             >
-              {details}
+              <RichText text={details} gap={8} />
             </div>
 
             <div
