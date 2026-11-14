@@ -1,0 +1,103 @@
+// Run by `test` or `verify` against the app's server (server.ts): the real Hindsight API with
+// the mock agent, on an empty store. The mock's curve is seeded by the prompt and period, so
+// a strategy's figures are the same on every run, and the harness answers the benchmark's
+// prices itself (a line that gains 50%), so the comparison is too.
+// The delete test runs first, so the run ends with a strategy in the store: `verify` relaunches
+// the app on a test's storage against the server as the run left it.
+test "a refinement joins the thread and runs the strategy again; a strategy is deleted after asking"
+  request POST "/test/reset"
+  request POST "/api/sessions" {"prompt": "Buy QQQ and hold it, 2015 to 2020"}
+  request POST "/test/settle"
+  reload
+  clock data
+  expect state strategies.length == 1
+  tap "strategy-0"
+  clock settle
+  clock data
+  expect disabled "refine-send"
+  type "refine-draft" "Rebalance weekly instead"
+  tap "refine-send"
+  clock data
+  expect text "refine-draft" == ""
+  request POST "/test/settle"
+  clock +2000
+  clock data
+  expect state detail.status == "done"
+  expect state detail.messages.2 .role == "user"
+  expect state detail.messages.2 .text == "Rebalance weekly instead"
+  expect state detail.messages.3 .role == "agent"
+  tap "more"
+  clock settle
+  tap "delete-strategy"
+  clock settle
+  tap "remove-confirm"
+  clock settle
+  clock data
+  expect state strategies == []
+  expect tree has "empty-new"
+
+test "a strategy is described, backtested and shown against its benchmark; a lost server is said in words and keeps the prompt"
+  request POST "/test/reset"
+  reload
+  expect tree has "empty-new"
+  tap "new-strategy"
+  clock settle
+  expect disabled "new-run"
+  expect text "new-hint" == "Describe a strategy and a period to run it."
+  type "new-prompt" "Hold SPY and rebalance monthly, 2018 to 2023"
+  fail fetch "http://127.0.0.1:8797"
+  tap "new-run"
+  clock data
+  expect text "new-error" == "Can’t reach your Hindsight server. Check that this phone is on your tailnet, then try again."
+  expect text "new-prompt" == "Hold SPY and rebalance monthly, 2018 to 2023"
+  pass fetch "http://127.0.0.1:8797"
+  tap "new-run"
+  clock data
+  clock settle
+  expect tree missing "new-prompt"
+  request POST "/test/settle"
+  clock +2000
+  clock data
+  expect state strategies.length == 1
+  expect state strategies.0 .status == "done"
+  expect state strategies.0 .periodText == "2018–2023"
+  expect tree has "strategy-return-0"
+  tap "strategy-0"
+  clock settle
+  clock data
+  clock data
+  expect state detail.hasResult == true
+  expect text "detail-meta" == "2018–2023 · $10,000 start"
+  expect text "detail-value" == "$20,950.40"
+  expect tree has "plot"
+  expect state charted == true
+  expect text "detail-ticker" == "SPY"
+  expect text "detail-edge" == "Beat SPY by 59.6 points"
+  expect state detail.messages.0 .role == "user"
+  expect state detail.messages.0 .text == "Hold SPY and rebalance monthly, 2018 to 2023"
+
+// The chart on its own screen: a pointer on it reads out that day, for the strategy and its
+// benchmark; the switch takes the benchmark away. A mouse keeps the day it rests on (a
+// lifted finger puts the result back), so the readout can be read after the drag.
+test "the chart expands; a drag across it reads out the day under the pointer; the comparison can be switched off" on web
+  request POST "/test/reset"
+  request POST "/api/sessions" {"prompt": "Hold SPY and rebalance monthly, 2018 to 2023"}
+  request POST "/test/settle"
+  reload
+  clock data
+  tap "strategy-0"
+  clock settle
+  clock data
+  clock data
+  tap "expand"
+  clock settle
+  expect text "full-value" == "$20,950.40"
+  expect text "stat-0" == "+109.5%"
+  expect state scrub == -1
+  tap "full-plot" drag 60 0 mouse
+  expect state scrub >= 1
+  expect tree has "full-plot-mark"
+  expect text "full-meta" == "Jan 4, 2021"
+  tap "compare"
+  expect state compared == false
+  expect tree missing "full-ticker"

@@ -62,8 +62,11 @@ export interface AgentResponseMetadata {
   model: string | null;
   /** Exact reasoning effort used, or null when no model was involved. */
   effort: CodexEffort | null;
-  /** Distinguishes non-LLM runs so the UI can explain a null model accurately. */
-  mode: 'codex' | 'mock' | 'saved-code' | 'legacy';
+  /**
+   * Which agent produced the response (`codex` or `claude`), or why no model
+   * was involved, so the UI can explain a null model accurately.
+   */
+  mode: 'codex' | 'claude' | 'mock' | 'saved-code' | 'legacy';
   /** Copyable, session-scoped version id, e.g. `BT-003`. */
   backtestId?: string;
 }
@@ -208,6 +211,11 @@ export interface Session {
   shareToken?: string | null;
   /** Scheduled signal-check state. Absent/null = not activated. */
   activation?: StrategyActivation | null;
+  /**
+   * The model this strategy's LLM-backed runs use instead of the app-wide
+   * setting (`AppSettings.model`). Absent/null = follow the setting.
+   */
+  model?: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -325,6 +333,8 @@ export interface CreateSessionBody {
   /** Optional overrides; the agent may also infer these from the prompt. */
   period?: Partial<Period>;
   startingCapital?: number;
+  /** Run this strategy on this model instead of the app-wide one (`Session.model`). */
+  model?: string | null;
 }
 
 /**
@@ -444,6 +454,151 @@ export interface SignalCheckResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Phone views (GET /api/mobile/strategies, GET /api/mobile/strategies/[id]).
+// Display-ready and small: text is pre-formatted with lib/format and curves are
+// pre-drawn SVG path data from lib/chart, so the phone app renders them as-is
+// and agrees with the web UI on every figure. See server/routes/mobile.ts.
+// ---------------------------------------------------------------------------
+
+/** One strategy as a list row. */
+export interface MobileStrategyRow {
+  id: string;
+  /** The agent's name for it; the clipped prompt until one exists. */
+  name: string;
+  description: string;
+  status: RunStatus;
+  /** False until a run has completed — the figures below are then empty. */
+  hasResult: boolean;
+  returnPct: number;
+  /** `+206.4%`, or '' without a result. */
+  returnText: string;
+  /** `$30,642.05`, or '' without a result. */
+  valueText: string;
+  /** `2016–2025`. */
+  periodText: string;
+  /** Sparkline SVG path data in `sparkBox` coordinates, or ''. */
+  spark: string;
+  /** The sparkline's `viewBox`. */
+  sparkBox: string;
+  updatedAt: number;
+}
+
+/** One strategy in full, including the live run's progress while one is in flight. */
+export interface MobileStrategy extends MobileStrategyRow {
+  prompt: string;
+  start: string;
+  end: string;
+  /** `+$20,642.05` — the gain or loss in dollars (the percent is `returnText`), or ''. */
+  changeText: string;
+  /** `2016–2025 · $10,000 start`. */
+  metaText: string;
+  /** Equity curve SVG path data (line, and the line closed into an area) in `chartBox` coordinates. */
+  chartLine: string;
+  chartArea: string;
+  chartBox: string;
+  /** Names the result on screen (`ranAt`), or '' without one: a new run is a new key. */
+  resultKey: string;
+  /** This strategy's own model id, or '' while it follows the app-wide setting. */
+  model: string;
+  /** The model its next run will use, by name (`GPT-5.6-Terra`); '' with the mock agent. */
+  modelName: string;
+  /** The agent that runs that model (`Codex`, `Claude Code`); '' with the mock agent. */
+  agentName: string;
+  /**
+   * The chat. An agent message's `text` is Markdown (paragraphs, `- ` bullets,
+   * `**bold**`); a user's or a system note's is plain. `note` is the small line
+   * under a bubble (`BT-002 · 41 seconds`, `1 image`), or ''.
+   */
+  messages: { id: string; role: ChatRole; text: string; note: string }[];
+  /** Steps of the run in flight; empty when idle. */
+  steps: { id: string; label: string; done: boolean }[];
+  /** The live status word (`Crunching…`), or '' when idle. */
+  statusLabel: string;
+  /** `0:23` elapsed in the live run, or '' when idle. */
+  elapsedText: string;
+}
+
+/**
+ * GET /api/mobile/settings — the phone's settings screen: the app-wide model
+ * and effort, the choices Codex offers, and whether runs can start at all.
+ */
+export interface MobileSettings {
+  /** `codex` for real runs; `mock` when the server simulates them (no model is called). */
+  agent: 'codex' | 'mock';
+  /** False when a run could not start (e.g. Codex is signed out); `status` says why. */
+  ready: boolean;
+  /** `Codex · signed in`, `Mock agent`, or the reason runs can't start. */
+  status: string;
+  /** Each agent and whether it can run: `{ name: 'Claude Code', status: 'Signed in', ready: true }`. */
+  agents: { name: string; status: string; ready: boolean }[];
+  model: string;
+  /** The current model's display name; its id when Codex no longer offers it. */
+  modelName: string;
+  /** False when the current model is not among `models` (e.g. the account lost it). */
+  modelOffered: boolean;
+  effort: string;
+  /** The choices, Codex's then Claude Code's; `group` is the agent's name (`Codex`). */
+  models: { id: string; name: string; description: string; group: string }[];
+  /** The efforts the current model accepts, as `{ id: 'xhigh', name: 'Extra high' }`. */
+  efforts: { id: string; name: string }[];
+}
+
+/** One point of the phone's chart, as the readout under a finger shows it. */
+export interface MobileChartPoint {
+  /** `Mar 3, 2021`. */
+  date: string;
+  /** `$12,345.67` — the portfolio's value that day. */
+  value: string;
+  /** `+23.5%` — its change since the start. */
+  change: string;
+  up: boolean;
+  /** The benchmark's value and change that day, or '' without a comparison. */
+  bench: string;
+  benchChange: string;
+  /** Where the point sits from the top of the plot, 0 to 1: alone, and on the scale shared with the benchmark. */
+  y: number;
+  sharedY: number;
+  /** The benchmark's point on the shared scale. */
+  benchY: number;
+}
+
+/**
+ * The equity curve for the phone: the paths to draw, with and without the
+ * benchmark, and the points a finger scrubs across. Point `i` of `n` sits at
+ * `i / (n - 1)` of the plot's width, as the paths are drawn.
+ */
+export interface MobileChart {
+  id: string;
+  /** The result this chart belongs to — `MobileStrategy.resultKey`. */
+  key: string;
+  box: string;
+  /** The strategy alone, on its own scale. */
+  line: string;
+  area: string;
+  /** Strategy and benchmark on one shared scale; '' when there is no comparison. */
+  sharedLine: string;
+  sharedArea: string;
+  benchLine: string;
+  /** The benchmark's symbol (`SPY`), or '' when the comparison could not be loaded. */
+  ticker: string;
+  /** `+182.1%` buy and hold over the same period. */
+  benchReturnText: string;
+  benchUp: boolean;
+  /** Why this symbol is the comparison. */
+  benchReason: string;
+  /** `Beat SPY by 36.1 points`, or '' without a comparison. */
+  edgeText: string;
+  ahead: boolean;
+  /** Why there is no comparison, in words, or ''. */
+  benchError: string;
+  points: MobileChartPoint[];
+  /** Year labels along the x axis; `at` is 0 to 1 of the width. */
+  ticks: { label: string; at: number }[];
+  /** Figures for the detail list (`Annualized`, `Max drawdown`, …). */
+  stats: { label: string; value: string }[];
+}
+
+// ---------------------------------------------------------------------------
 // App settings (GET/PUT /api/settings). Persisted at `${data}/settings.json`;
 // model + effort are forwarded to the agent container as HS_MODEL / HS_EFFORT
 // on LLM-backed runs (initial/refine). See PROTOCOL.md §6.
@@ -471,6 +626,66 @@ export interface AppSettings {
 /** PUT /api/settings — partial update; the server merges, validates, persists. */
 export type UpdateSettingsBody = Partial<AppSettings>;
 
+/** The agents that can write a strategy: the Codex CLI or Claude Code. */
+export type AgentProvider = 'codex' | 'claude';
+
+/** One model an agent offers the signed-in account (GET /api/models). */
+export interface CodexModelInfo {
+  /** The agent that runs it. A Claude model's id starts with `claude`. */
+  provider: AgentProvider;
+  /** What goes to `codex exec -m` or `claude --model`, e.g. `gpt-5.6-terra`. */
+  id: string;
+  /** Codex's display name, e.g. `GPT-5.6-Terra`. */
+  name: string;
+  /** Codex's one-line description; may be ''. */
+  description: string;
+  /** Reasoning efforts this model accepts, weakest first. */
+  efforts: CodexEffort[];
+  defaultEffort: CodexEffort;
+}
+
+/**
+ * GET /api/models — the models a run may use: Codex's, then Claude Code's when
+ * it is signed in on this machine. `source` says where the Codex list came
+ * from: `codex` (the CLI's live catalog), `cache` (the catalog the CLI last
+ * saved under its home), or `builtin` (Codex could not be asked).
+ */
+export interface ModelsResponse {
+  models: CodexModelInfo[];
+  source: 'codex' | 'cache' | 'builtin';
+}
+
+/** One turn of a brainstorm: what the person said, or what the assistant answered. */
+export interface IdeaMessage {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
+/**
+ * POST /api/ideas — talk an idea through before any strategy exists. The whole
+ * conversation is sent each time (the server keeps none); the last message is
+ * the person's. `model` picks who answers; none follows the app-wide setting.
+ */
+export interface IdeasBody {
+  messages: IdeaMessage[];
+  model?: string | null;
+}
+
+/**
+ * The assistant's answer: `reply` is what it says (Markdown), `strategy` the
+ * idea so far as one plain-English prompt ready to backtest — '' while the
+ * idea is still too vague to test.
+ */
+export interface IdeasReply {
+  reply: string;
+  strategy: string;
+}
+
+/** PUT /api/sessions/[id]/model — set or clear (`null`) a strategy's own model. */
+export interface SessionModelBody {
+  model: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Agent health (GET /api/health). Tells the UI whether a run can be started
 // at all — in 'codex' mode that requires Codex CLI credentials on the host.
@@ -489,4 +704,6 @@ export interface AgentHealth {
   hint: string | null;
   /** Host path inspected for credentials (codex mode only). */
   codexHome: string | null;
+  /** The agent the answer is about: the one that runs the model in question. */
+  provider?: AgentProvider;
 }

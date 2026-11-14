@@ -30,6 +30,7 @@ import {
   signalWorkDir,
   strategyFile,
 } from '@/lib/server/paths';
+import { dockerUserArgs } from '@/lib/server/agent/dockerUser';
 
 /** Weight moves smaller than this are float noise, not signals (0.5%). */
 const MIN_WEIGHT_DELTA = 0.005;
@@ -123,7 +124,7 @@ async function runScratchBacktest(
     };
     const proc = spawn(
       'docker',
-      ['run', '--rm', '--name', cname, '-e', 'HS_KIND=rerun', '-v', `${dir}:/work`, image],
+      ['run', '--rm', '--name', cname, ...dockerUserArgs(), '-e', 'HS_KIND=rerun', '-v', `${dir}:/work`, image],
       { stdio: ['ignore', 'pipe', 'pipe'] },
     );
     const deadline = setTimeout(() => {

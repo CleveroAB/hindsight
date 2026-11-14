@@ -46,6 +46,7 @@ import {
 } from '@/lib/backtests';
 import { selectRunner } from '@/lib/server/agent';
 import { selectBenchmark } from '@/lib/server/benchmark';
+import { effortFor, providerOf } from '@/lib/server/models';
 import { getSettingsSync } from '@/lib/server/settings';
 import * as store from '@/lib/server/store';
 import {
@@ -89,6 +90,12 @@ export interface RunManager {
   subscribe(sessionId: string, send: (frame: SseFrame) => void): () => void;
   interrupt(sessionId: string): Promise<void>;
   isActive(sessionId: string): boolean;
+  /**
+   * The live run's snapshot (steps + status line), or null when no run is in
+   * flight. The same object an SSE subscriber gets as its first frame — for
+   * clients that poll instead of holding a stream open (the phone app).
+   */
+  liveSnapshot(sessionId: string): RunSnapshot | null;
 }
 
 /** Live, in-memory state for one active run. Never persisted. */
@@ -759,13 +766,20 @@ function createRunManager(): RunManager {
     await store.saveSession(session);
 
     // Snapshot immediately before runner.start() (there is no await between
-    // the two reads), so these are the exact app-wide values Codex receives.
+    // the two reads), so these are the exact values Codex receives: the
+    // app-wide settings, with the strategy's own model over them when it has one.
     // Later settings changes must not rewrite an older response's provenance.
+    const llmSettings = (): Omit<AgentResponseMetadata, 'durationMs'> => {
+      const settings = getSettingsSync();
+      const model = session.model || settings.model;
+      // The agent is the model's: a Claude model runs on Claude Code.
+      return { model, effort: effortFor(model, settings.effort), mode: providerOf(model) };
+    };
     const responseUsage: Omit<AgentResponseMetadata, 'durationMs'> =
       runner.kind === 'mock'
         ? { model: null, effort: null, mode: 'mock' }
         : kind === 'initial' || kind === 'refine'
-          ? { ...getSettingsSync(), mode: 'codex' }
+          ? llmSettings()
           : { model: null, effort: null, mode: 'saved-code' };
 
     // The agent sees the complete current conversation/history, but its period,
@@ -806,7 +820,7 @@ function createRunManager(): RunManager {
         kind,
         message,
         attachments,
-        ...(responseUsage.mode === 'codex'
+        ...(responseUsage.mode === 'codex' || responseUsage.mode === 'claude'
           ? { model: responseUsage.model ?? undefined, effort: responseUsage.effort ?? undefined }
           : {}),
         onEvent,
@@ -927,7 +941,12 @@ function createRunManager(): RunManager {
     return runtimeFor(sessionId).active !== null;
   }
 
-  return { startRun, subscribe, interrupt, isActive };
+  function liveSnapshot(sessionId: string): RunSnapshot | null {
+    const run = runtimeFor(sessionId).active;
+    return run ? buildSnapshot(sessionId, run, 'running') : null;
+  }
+
+  return { startRun, subscribe, interrupt, isActive, liveSnapshot };
 }
 
 // Process-wide singleton, guarded against dev HMR re-initialisation.

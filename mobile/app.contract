@@ -1,0 +1,881 @@
+// Hindsight for iPhone: the view. Describe a strategy, watch the backtest run, read its
+// equity curve against a benchmark, refine it by chatting. app.ts keeps the list of
+// strategies and talks to the Hindsight API server (../server); this file only says what
+// each screen shows and which write each action sends. Colours, fonts, bars and controls are
+// left to the platform; the only hues named are the roles for a gain and a loss.
+use Badge, EmptyState from "exact:content"
+
+routes nav
+  home "/"
+    strategy "/strategy/:id"
+      performance "/strategy/:id/performance"
+    create "/new"
+      ideas "/new/ideas"
+    settings "/settings"
+
+// One strategy as a list row. Its figures arrive formatted, and its sparkline as SVG path
+// data, from the server: the web app draws the same strings.
+shape Row
+  id: string
+  name: string
+  description: string
+  status: string
+  hasResult: bool
+  up: bool
+  returnText: string
+  valueText: string
+  periodText: string
+  spark: string
+  sparkBox: string
+
+// One chat message. An agent's `text` is Markdown; `note` is the small line under a bubble.
+shape Message
+  id: string
+  role: string
+  text: string
+  note: string
+
+shape Step
+  id: string
+  label: string
+  done: bool
+
+// One strategy in full. `id` is "" until an answer lands, and names which strategy the
+// answer is for, so a retained answer is never shown under another strategy's title.
+// `resultKey` names the result: a new run is a new key, and the chart is asked for again.
+shape Detail
+  id: string
+  name: string
+  status: string
+  hasResult: bool
+  up: bool
+  returnText: string
+  valueText: string
+  changeText: string
+  metaText: string
+  resultKey: string
+  model: string
+  modelName: string
+  agentName: string
+  chartLine: string
+  chartArea: string
+  chartBox: string
+  messages: Message[]
+  steps: Step[]
+  statusLabel: string
+  elapsedText: string
+
+// One day of the curve, as the readout under a finger shows it. `y`, `sharedY` and `benchY`
+// are 0 to 1 from the top of the plot: alone, and on the scale shared with the benchmark.
+shape Point
+  date: string
+  value: string
+  change: string
+  up: bool
+  bench: string
+  benchChange: string
+  y: number
+  sharedY: number
+  benchY: number
+
+shape Tick
+  label: string
+  at: number
+
+shape Stat
+  label: string
+  value: string
+
+// The curve to scrub: the paths with and without the benchmark, and its points. Point i of
+// n sits at i / (n - 1) of the plot's width.
+shape Chart
+  id: string
+  key: string
+  box: string
+  line: string
+  area: string
+  sharedLine: string
+  sharedArea: string
+  benchLine: string
+  ticker: string
+  benchReturnText: string
+  benchReason: string
+  edgeText: string
+  benchError: string
+  points: Point[]
+  ticks: Tick[]
+  stats: Stat[]
+
+// A model an agent offers (`group` is the agent's name), an agent and whether it is signed
+// in on the server, and a reasoning effort the current model accepts.
+shape Model
+  id: string
+  name: string
+  description: string
+  group: string
+
+shape Agent
+  name: string
+  status: string
+  ready: bool
+
+shape Effort
+  id: string
+  name: string
+
+// The app-wide model and effort, the choices each agent offers this account, and whether
+// runs can start. `agent` is "codex", or "mock" when the server simulates runs.
+shape Settings
+  agent: string
+  ready: bool
+  status: string
+  agents: Agent[]
+  model: string
+  modelName: string
+  modelOffered: bool
+  effort: string
+  models: Model[]
+  efforts: Effort[]
+
+// One turn of the brainstorm in the New Strategy sheet. An assistant's `strategy` is its
+// draft of the idea at that point ("" while there is not enough to test).
+shape Idea
+  id: string
+  role: string
+  text: string
+  strategy: string
+
+shape Reply
+  ok: bool
+  error: string
+
+fn tone(up: bool): string = up ? "-exact-system-green" : "-exact-system-red"
+fn percent(fraction: number): string = `${fraction * 100}%`
+
+// The chart's height in the thread: full at rest, and what it shrinks to once the thread
+// is scrolled, where it stays pinned under the bar.
+fn chartFull(): number = 176
+fn chartCompact(): number = 84
+
+// While a backtest runs: a wave of light through a rising bar chart, one bar after the
+// next, and each quote arriving in the last one's place.
+keyframes wave
+  from opacity=0.18 translate="0px 3px"
+  to opacity=0.95 translate="0px 0px"
+keyframes arrive
+  from opacity=0 translate="0px 6px"
+  to opacity=1 translate="0px 0px"
+
+// Words to wait by, in the order shown; `quoteBy` names who said each.
+fn quoteAt(i: number): string = i == 0 ? "In the short run, the market is a voting machine, but in the long run it is a weighing machine." : i == 1 ? "Price is what you pay. Value is what you get." : i == 2 ? "The four most dangerous words in investing are: ‘this time it’s different.’" : i == 3 ? "Know what you own, and know why you own it." : i == 4 ? "The big money is not in the buying or the selling, but in the waiting." : i == 5 ? "Don’t look for the needle in the haystack. Just buy the haystack." : i == 6 ? "Risk comes from not knowing what you’re doing." : "The investor’s chief problem, and even his worst enemy, is likely to be himself."
+fn quoteBy(i: number): string = i == 0 ? "Benjamin Graham" : i == 1 ? "Warren Buffett" : i == 2 ? "Sir John Templeton" : i == 3 ? "Peter Lynch" : i == 4 ? "Charlie Munger" : i == 5 ? "John C. Bogle" : i == 6 ? "Warren Buffett" : "Benjamin Graham"
+
+component Hindsight
+  state prompt = ""
+  // The last Run's refusal, in red under the field until a Run succeeds.
+  state refusal = ""
+  state reply = ""
+  // The point under the finger, or -1 with no finger on the chart.
+  state scrub = -1
+  // Whether the benchmark is drawn beside the strategy. Kept across launches.
+  state compare = true persist
+  // True from the poll that saw a run in flight to the one that sees it over.
+  state watching = false
+  // The chart's height in the thread: it gives way to the conversation as the thread scrolls.
+  state chartHeight = 176
+  // The model a new strategy will run on; "" follows the setting.
+  state newModel = ""
+  // The brainstorm's field, and the message on its way to an answer ("" when none is).
+  state ideaDraft = ""
+  state ideaSending = ""
+  // Counts the polls of a run in flight: every fifth (ten seconds) brings the next quote.
+  state beat = 0
+  derive selected = match stack(nav).filter(e => e.name == "strategy").at(-1) { case some(e) => e.params.id, case none => "" }
+  resource strategies = loadStrategies() as shape Row[] else empty()
+  resource detail = loadStrategy(selected) when selected != "" as shape Detail else empty()
+  resource settings = loadSettings() as shape Settings else empty()
+  resource ideas = loadIdeas() as shape Idea[] else empty()
+  resource chart = loadChart(selected, detail.resultKey) when selected != "" and detail.id == selected and detail.resultKey != "" as shape Chart else empty()
+  mutation created as shape Reply refreshes strategies then afterCreate
+  mutation refined as shape Reply refreshes detail, strategies then afterRefine
+  mutation stopped as shape Reply refreshes detail, strategies
+  mutation removed as shape Reply refreshes strategies
+  mutation tuned as shape Reply refreshes settings, detail
+  mutation assigned as shape Reply refreshes detail
+  mutation talked as shape Reply refreshes ideas then afterIdea
+  mutation forgot as shape Reply refreshes ideas
+  derive createError = match created { case some(r) => r.error, case none => "" }
+  derive refineError = pending(refined) ? "" : match refined { case some(r) => r.error, case none => "" }
+  derive removeError = pending(removed) ? "" : match removed { case some(r) => r.error, case none => "" }
+  derive tuneError = pending(tuned) ? "" : match tuned { case some(r) => r.error, case none => "" }
+  derive assignError = pending(assigned) ? "" : match assigned { case some(r) => r.error, case none => "" }
+  derive ideaError = pending(talked) ? "" : match talked { case some(r) => r.error, case none => "" }
+  // The idea as it stands: the latest draft the assistant has written.
+  derive draftStrategy = match ideas.filter(m => m.strategy != "").at(-1) { case some(m) => m.strategy, case none => "" }
+  derive listError = removeError != "" ? removeError : (pending(strategies) ? "" : match failure(strategies) { case some(f) => "Can’t reach your Hindsight server. Check that this phone is on your tailnet, then try again.", case none => "" })
+  derive runHint = pending(created) ? "Starting…" : prompt.trim() == "" ? "Describe a strategy and a period to run it." : ""
+  // The answer on screen belongs to the strategy on screen.
+  derive ready = detail.id == selected and selected != ""
+  derive running = ready and detail.status == "running"
+  // The chart on screen belongs to the result on screen.
+  derive charted = ready and chart.id == selected and chart.key == detail.resultKey and chart.points.length > 1
+  derive compared = charted and compare and chart.benchLine != ""
+  derive scrubbing = charted and scrub >= 0
+  derive point = match chart.points.at(max(scrub, 0)) { case some(p) => p, case none => Point(date="", value="", change="", up=true, bench="", benchChange="", y=0, sharedY=0, benchY=0) }
+  // What the plot draws: the server's scrubbable curve once it lands, the detail's own
+  // line until then, so a strategy never opens on an empty box.
+  derive line = charted ? (compared ? chart.sharedLine : chart.line) : detail.chartLine
+  derive area = charted ? (compared ? chart.sharedArea : chart.area) : detail.chartArea
+  derive bench = compared ? chart.benchLine : ""
+  derive box = charted ? chart.box : detail.chartBox
+  derive markX = chart.points.length > 1 ? scrub / (chart.points.length - 1) : 0
+  derive markY = compared ? point.sharedY : point.y
+  // The full-screen chart's readout: the day under the finger, else the result as it ended.
+  derive readLabel = scrubbing ? point.date : detail.metaText
+  derive readValue = scrubbing ? point.value : detail.valueText
+  derive readBadge = scrubbing ? point.change : detail.returnText
+  derive readUp = scrubbing ? point.up : detail.up
+  derive readSub = scrubbing ? (compared ? `${chart.ticker} ${point.bench} (${point.benchChange})` : "") : detail.changeText
+  // In the thread the day under the finger is written on the chart itself, which may be
+  // all of the result that is still on screen.
+  derive dayNote = scrubbing ? `${point.date} · ${point.value} (${point.change})` : ""
+  derive benchNote = scrubbing and compared ? `${chart.ticker} ${point.bench} (${point.benchChange})` : ""
+  derive quoteIndex = floor(beat / 5) - floor(beat / 40) * 8
+  // How much of the fade under the pinned chart shows: none at rest, all of it once the
+  // chart has given up 40 points of height.
+  derive chartFade = min(1, (chartFull() - chartHeight) / 40)
+  derive defaultModel = settings.modelName != "" ? `Default (${settings.modelName})` : "Default"
+
+  // A run in flight changes every second or two; nothing else changes on its own, so the
+  // list is re-read on the same beat and the detail only while its strategy is running.
+  task poll mount
+    every(2000, pull)
+
+  action pull
+    refresh strategies
+    if running
+      watching = true
+      beat = beat + 1
+      refresh detail
+    else if watching
+      // The run just ended: bring its result back into view.
+      watching = false
+      if ready and detail.hasResult
+        haptic("success")
+        scrollIntoView("thread-top", behavior="smooth")
+  action retry
+    refresh strategies
+    refresh detail
+  action follow(url: string)
+    chartHeight = chartFull()
+    nav = go(nav, url)
+  action back
+    nav = back(nav)
+  action openCreate
+    prompt = ""
+    refusal = ""
+    newModel = ""
+    ideaDraft = ""
+    ideaSending = ""
+    send forgot = resetIdeas()
+    nav = push(nav, "/new")
+  // The brainstorm opens inside the sheet, over the form it will fill.
+  action openIdeas
+    nav = push(nav, "/new/ideas")
+  action editIdea(v: string)
+    ideaDraft = v
+  // What is said (typed, or one of the starters) shows at once as a bubble on its way,
+  // and joins the thread with its answer.
+  action sayIdea(text: string)
+    if text.trim() != "" and not pending(talked)
+      ideaSending = text.trim()
+      ideaDraft = ""
+      send talked = sendIdea(text.trim(), newModel)
+      scrollIntoView("ideas-end", block="end", behavior="smooth")
+  // Unanswered, the words go back in the field to send again.
+  action afterIdea
+    if ideaError != ""
+      ideaDraft = ideaSending
+    ideaSending = ""
+    scrollIntoView("ideas-end", block="end", behavior="smooth")
+  // The draft becomes the form's strategy, to read over, change and run.
+  action useIdea
+    if draftStrategy != ""
+      prompt = draftStrategy
+      refusal = ""
+      nav = back(nav)
+  action openSettings
+    refresh settings
+    nav = push(nav, "/settings")
+  action pickNewModel(id: string)
+    newModel = id
+  action chooseModel(id: string)
+    if id != settings.model
+      send tuned = setModel(id)
+  action chooseEffort(id: string)
+    if id != settings.effort
+      send tuned = setEffort(id)
+  // "" gives the strategy back to the app-wide model.
+  action assign(id: string)
+    if id != detail.model
+      send assigned = setStrategyModel(selected, id)
+  // The chart is full at the top of the thread and gives a point of height for each point
+  // scrolled, down to its compact size; a spacer under it takes up what it gives, so the
+  // conversation keeps its place.
+  action scrolled(x: number, y: number)
+    let next = round(max(chartCompact(), min(chartFull(), chartFull() - y)))
+    if next != chartHeight
+      chartHeight = next
+  action openPerformance
+    scrub = -1
+    nav = push(nav, path("performance", selected))
+  action editPrompt(v: string)
+    prompt = v
+  action run
+    if prompt.trim() != "" and not pending(created)
+      send created = createStrategy(prompt.trim(), newModel)
+  // The sheet closes only on an ok reply; a refusal keeps it open, saying why.
+  action afterCreate
+    refusal = createError
+    if createError == "" and top(nav).name == "create"
+      nav = back(nav)
+  action editReply(v: string)
+    reply = v
+  action refine
+    if reply.trim() != "" and not pending(refined) and not running
+      send refined = refineStrategy(selected, reply.trim())
+  // The message is in the thread: clear the field and show the run starting under it.
+  action afterRefine
+    if refineError == ""
+      reply = ""
+      watching = true
+      scrollIntoView("thread-end", block="end", behavior="smooth")
+  action stop
+    send stopped = stopStrategy(selected)
+  action askRemove
+    showModal("remove")
+  action remove
+    send removed = removeStrategy(selected)
+    nav = back(nav)
+  action swipeRemove(id: string)
+    send removed = removeStrategy(id)
+  action setCompare(on: bool)
+    compare = on
+  // A finger (or a mouse) on the plot picks the nearest day. The plot's width is read from
+  // its last layout, so the same action serves the card and the full-screen chart.
+  action scrubAt(plot: string, e: PointerEvent)
+    let width = frame(plot).width
+    let last = chart.points.length - 1
+    if charted and width > 0
+      let i = max(0, min(last, round(e.offsetX / width * last)))
+      if i != scrub
+        scrub = i
+  // A lifted finger puts the readout back; a mouse keeps the day it rests on.
+  action scrubEnd(e: PointerEvent)
+    if e.pointerType != "mouse"
+      scrub = -1
+
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow interactive-widget="resizes-content" testId="app" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` navigationScroll="strategies" position="absolute" inset=0
+            header display="flex" align-items="center" padding="8px 16px"
+              button press=openSettings aria-label="Settings" testId="open-settings"
+                image "symbol:settings"
+              text "Hindsight" role="heading" aria-level=1 flex=1
+              button press=openCreate aria-label="New Strategy" testId="new-strategy"
+                image "symbol:add"
+            if strategies.length == 0
+              column flex=1 min-height=0
+                if listError != ""
+                  EmptyState(symbol="symbol:alert", title="Can’t Load Strategies", message=listError)
+                    button press=retry testId="retry"
+                      text "Try Again"
+                else if pending(strategies) and not current(strategies)
+                  column flex=1 justify-content="center" align-items="center"
+                    progress aria-label="Loading" testId="loading"
+                else
+                  EmptyState(symbol="symbol:chart", title="No Backtests", message="Describe a strategy in plain English and Hindsight backtests it on historical data. Nothing is traded.")
+                    button press=openCreate testId="empty-new"
+                      text "New Strategy"
+            else
+              list id="strategies" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+                // A failed poll or a refused delete, over the rows it is about.
+                if listError != ""
+                  section
+                    row
+                      text listError color="-exact-system-red" flex=1 min-width=0 testId="list-error"
+                      button press=retry testId="retry-list"
+                        text "Try Again"
+                section
+                  for s, i in strategies key=s.id
+                    link href=path("strategy", s.id) delete=swipeRemove(s.id) testId=`strategy-${i}`
+                      StrategyRow(row=s, index=i)
+                  footer
+                    text "Historical data only. Nothing is traded."
+        if e.name == "strategy"
+          column navigationKey=`${e.id}` navigationScroll="thread" position="absolute" inset=0
+            header display="flex" align-items="center" padding="8px 16px"
+              // Back, named so that it can be refused: while a finger is on the chart the
+              // drag is the chart's, not the swipe that pops the screen.
+              button id="back" press=back disabled=scrubbing aria-label="Back" testId="strategy-back"
+                image "symbol:back"
+              text (ready ? detail.name : "Strategy") role="heading" aria-level=2 testId="detail-title"
+              button popovertarget="strategy-menu" aria-label="More" testId="more"
+                image "symbol:ellipsis"
+            column id="strategy-menu" popover="auto" role="menu"
+              if settings.agent == "codex"
+                column role="group" aria-label="Model for this strategy"
+                  button role="menuitemradio" aria-checked=(detail.model == "") press=assign("") disabled=running
+                    popovertarget="strategy-menu" popovertargetaction="hide" testId="model-default"
+                    text defaultModel
+                for a in settings.agents key=a.name
+                  if a.ready
+                    column role="group" aria-label=a.name
+                      for m in settings.models.filter(m => m.group == a.name) key=m.id
+                        button role="menuitemradio" aria-checked=(detail.model == m.id) press=assign(m.id) disabled=running
+                          popovertarget="strategy-menu" popovertargetaction="hide" testId=`model-${m.id}`
+                          text m.name
+                hr
+              button press=askRemove destructive=true popovertarget="strategy-menu" popovertargetaction="hide" testId="delete-strategy"
+                text "Delete Strategy"
+            if ready
+              // The thread: the result first, then the conversation, the run in flight last.
+              column position="relative" flex=1 min-height=0
+                ThreadNotice(refusal=refineError, assignRefusal=assignError)
+                scroll id="thread" flex=1 min-height=0 keyboardDismissMode="interactive" scroll=scrolled
+                  column padding-bottom=12
+                    view id="thread-top" height=0
+                    if detail.hasResult and line != ""
+                      // The chart stays under the bar while the thread scrolls beneath it,
+                      // shrinking to its compact height on the way.
+                      view position="sticky" top=0 z-index=2 padding="8px 16px 6px 16px" background-color="-exact-background" testId="chart-bar"
+                        // The thread scrolls under the chart and on under the bar: this
+                        // keeps it out of sight above the chart too, so nothing shows
+                        // through the bar while the chart is pinned.
+                        view position="absolute" left=0 right=0 top=-600 height=600 background-color="-exact-background" pointer-events="none" aria-hidden=true
+                        // Under the pinned chart the thread fades out instead of being cut.
+                        view position="absolute" left=0 right=0 top="100%" height=32 opacity=chartFade pointer-events="none" aria-hidden=true
+                          background-image="linear-gradient(to bottom, -exact-background, transparent)"
+                        Plot(plot="plot", box=box, line=line, area=area, bench=bench, up=detail.up, marked=scrubbing, x=markX, y=markY, benchY=point.benchY, height=chartHeight, touch="pan-y", note=dayNote, note2=benchNote, label=`Equity curve, ${detail.returnText}`, scrub=scrubAt("plot"), release=scrubEnd)
+                      view height=(chartFull() - chartHeight) flex-shrink=0
+                    if detail.hasResult
+                      column id="result" padding="0 16px 14px 16px" gap=12 testId="result"
+                        if charted
+                          Axis(ticks=chart.ticks)
+                        row align-items="flex-start" gap=12
+                          column flex=1 min-width=0
+                            Readout(prefix="detail", label=detail.metaText, value=detail.valueText, badge=detail.returnText, up=detail.up, sub=detail.changeText)
+                          button press=openPerformance buttonStyle="bordered" aria-label="Expand chart" testId="expand"
+                            text "Expand"
+                        if charted
+                          Legend(prefix="detail", up=detail.up, returnText=detail.returnText, ticker=(compared ? chart.ticker : ""), benchReturnText=chart.benchReturnText, edge=(compared ? chart.edgeText : ""), error=chart.benchError)
+                    for m in detail.messages key=m.id
+                      Bubble(m=m)
+                    if running
+                      RunCard(detail=detail, quote=quoteAt(quoteIndex), by=quoteBy(quoteIndex))
+                    view id="thread-end" height=1
+              // The composer rides the keyboard under the thread it writes into, on glass,
+              // so what is typed reads over whatever of the thread is behind it. While a
+              // run is in flight its button stops the run instead.
+              row align-items="flex-end" margin="6px 12px" padding="0 4px 0 12px" border-radius=22
+                backgroundMaterial="glass"
+                textarea id="composer" value=reply input=editReply rows=1 field-sizing="content" max-height=140
+                  placeholder=(running ? "Running the backtest…" : "Refine this strategy") aria-label="Refinement"
+                  disabled=running testId="refine-draft" flex=1 min-width=0 padding="12px 0"
+                  border="none" background-color="transparent"
+                if running
+                  button press=stop disabled=pending(stopped) buttonStyle="filled" destructive=true margin="4px 0"
+                    aria-label="Stop Run" testId="run-stop"
+                    image "symbol:stop-fill"
+                else
+                  button press=refine disabled=(reply.trim() == "" or pending(refined)) buttonStyle="filled" margin="4px 0"
+                    retainFocus=true aria-label="Send" testId="refine-send"
+                    image "symbol:send"
+            else if failed(detail) and not pending(detail)
+              EmptyState(symbol="symbol:alert", title="Can’t Load Strategy", message="Your Hindsight server didn’t answer. Check that this phone is on your tailnet, then try again.")
+                button press=retry testId="detail-retry"
+                  text "Try Again"
+            else
+              column flex=1 justify-content="center" align-items="center"
+                progress aria-label="Loading" testId="detail-loading"
+        if e.name == "performance"
+          column navigationKey=`${e.id}` navigationScroll="performance" position="absolute" inset=0
+            header display="flex" align-items="center" padding="8px 16px"
+              button id="back" press=back disabled=scrubbing aria-label="Back" testId="performance-back"
+                image "symbol:back"
+              text "Performance" role="heading" aria-level=2
+            if ready and detail.hasResult
+              scroll id="performance" flex=1 min-height=0
+                column padding=16 gap=16
+                  Readout(prefix="full", label=readLabel, value=readValue, badge=readBadge, up=readUp, sub=readSub)
+                  if line != ""
+                    column gap=6
+                      Plot(plot="full-plot", box=box, line=line, area=area, bench=bench, up=detail.up, marked=scrubbing, x=markX, y=markY, benchY=point.benchY, height=320, touch="none", note="", note2="", label=`Equity curve, ${detail.returnText}`, scrub=scrubAt("full-plot"), release=scrubEnd)
+                      if charted
+                        Axis(ticks=chart.ticks)
+                  if charted
+                    Legend(prefix="full", up=detail.up, returnText=detail.returnText, ticker=(compared ? chart.ticker : ""), benchReturnText=chart.benchReturnText, edge=(compared ? chart.edgeText : ""), error=chart.benchError)
+                    if chart.benchLine != ""
+                      column border-radius=16 padding="6px 16px" background-color="-exact-secondary-background"
+                        row align-items="center" gap=12 padding="6px 0"
+                          text `Compare with ${chart.ticker}` flex=1 min-width=0
+                          input type="checkbox" switch checked=compare change=setCompare aria-label=`Compare with ${chart.ticker}` testId="compare"
+                    column border-radius=16 padding="2px 16px" background-color="-exact-secondary-background" testId="stats"
+                      for s, i in chart.stats key=s.label
+                        if i > 0
+                          hr
+                        row align-items="baseline" gap=12 padding="11px 0"
+                          text s.label flex=1 min-width=0 color="-exact-secondary-label"
+                          text s.value font-variant-numeric="tabular-nums" text-align="right" testId=`stat-${i}`
+                    if chart.benchReason != ""
+                      text chart.benchReason font="-exact-footnote" color="-exact-secondary-label" padding="0 4px"
+                  else if not failed(chart)
+                    row justify-content="center" padding=24
+                      progress aria-label="Loading chart"
+            else
+              column flex=1 justify-content="center" align-items="center"
+                progress aria-label="Loading"
+        if e.name == "create"
+          column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll="create-form" position="absolute" inset=0
+            header display="flex" align-items="center" justify-content="space-between" padding="8px 16px"
+              button id="back" press=back aria-label="Cancel" testId="new-cancel"
+                image "symbol:close"
+              text "New Strategy" role="heading"
+              button press=run buttonStyle="bordered-prominent" aria-label="Run" testId="new-run"
+                disabled=(prompt.trim() == "" or pending(created))
+                image "symbol:checkmark"
+            list id="create-form" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+              section
+                header
+                  text "Strategy"
+                row padding-top=8 padding-bottom=8
+                  column flex=1 min-width=0 gap=4
+                    textarea value=prompt input=editPrompt placeholder="Buy the S&P 500 when it closes above its 200-day average, otherwise hold cash. 2010 to 2024."
+                      aria-label="Strategy" rows=5 autofocus=true aria-invalid=(refusal != "") testId="new-prompt"
+                    if refusal != ""
+                      text refusal font="-exact-footnote" color="-exact-system-red" testId="new-error"
+                footer
+                  text runHint testId="new-hint"
+              if settings.agent == "codex"
+                section
+                  row
+                    text "Model"
+                    select value=newModel change=pickNewModel aria-label="Model" testId="new-model"
+                      option defaultModel value=""
+                      for m in settings.models key=m.id
+                        option m.name value=m.id
+              section
+                header
+                  text "Not sure yet?"
+                button press=openIdeas testId="open-ideas"
+                  text (ideas.length > 0 ? "Continue Brainstorming" : "Brainstorm with Hindsight")
+                footer
+                  text "Talk an idea through and shape it into a strategy first. Nothing is backtested until you run it."
+        if e.name == "ideas"
+          // Shown inside the New Strategy sheet: a conversation that ends in a strategy to
+          // put in its form. It has no Back control of its own, so the sheet's is the platform's.
+          column navigationKey=`${e.id}` navigationScroll="ideas-thread" position="absolute" inset=0
+            header display="flex" align-items="center" padding="8px 16px"
+              text "Brainstorm" role="heading" aria-level=2
+            column position="relative" flex=1 min-height=0
+              ThreadNotice(refusal=ideaError, assignRefusal="")
+              scroll id="ideas-thread" flex=1 min-height=0 keyboardDismissMode="interactive"
+                column padding-top=8 padding-bottom=12
+                  Talk(mine=false, body="Tell me what you’d like to test: a hunch, a rule, a ticker. We’ll shape it into a strategy together, and nothing runs until you say so.", name="idea-intro")
+                  if ideas.length == 0 and ideaSending == ""
+                    column padding="8px 16px 4px 16px" gap=8 align-items="flex-start"
+                      text "Or start from one of these" font="-exact-footnote" color="-exact-secondary-label" padding="0 4px"
+                      for starter, i in ["Buy the biggest tech companies and hold them.", "Rotate into whichever sectors did best over the last six months.", "Buy SPY when it dips 10% and sell when it recovers."] key=starter
+                        button press=sayIdea(starter) appearance="none" padding="10px 14px" border-radius=16 border="1px solid -exact-separator" testId=`idea-starter-${i}`
+                          text starter color="-exact-label" text-align="left"
+                  for m in ideas key=m.id
+                    Talk(mine=(m.role == "user"), body=m.text, name=m.id)
+                  if ideaSending != ""
+                    Talk(mine=true, body=ideaSending, name="idea-sending")
+                    row padding="3px 16px"
+                      row padding="10px 14px" gap=10 align-items="center" border-radius=18 background-color="-exact-fill" testId="idea-thinking"
+                        progress width=16 height=16 aria-label="Thinking"
+                        text "Thinking…" color="-exact-secondary-label"
+                  else if draftStrategy != ""
+                    column margin="10px 16px 4px 16px" padding=14 gap=10 border-radius=18 background-color="-exact-secondary-background" testId="idea-draft"
+                      text "Strategy so far" font="-exact-footnote" font-weight=600 color="-exact-secondary-label"
+                      text draftStrategy testId="idea-draft-text"
+                      button press=useIdea buttonStyle="filled" testId="idea-use"
+                        text "Use This Strategy"
+                      text "It goes into the New Strategy form to read over. Nothing runs until you tap Run there." font="-exact-footnote" color="-exact-secondary-label"
+                  view id="ideas-end" height=1
+            row align-items="flex-end" margin="6px 12px" padding="0 4px 0 12px" border-radius=22
+              backgroundMaterial="glass"
+              textarea id="idea-composer" value=ideaDraft input=editIdea rows=1 field-sizing="content" max-height=140
+                placeholder=(ideas.length == 0 ? "Describe an idea" : "Reply, or change something") aria-label="Idea"
+                disabled=pending(talked) testId="idea-field" flex=1 min-width=0 padding="12px 0"
+                border="none" background-color="transparent"
+              button press=sayIdea(ideaDraft) disabled=(ideaDraft.trim() == "" or pending(talked)) buttonStyle="filled" margin="4px 0"
+                retainFocus=true aria-label="Send" testId="idea-send"
+                image "symbol:send"
+        if e.name == "settings"
+          column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll="settings-form" position="absolute" inset=0
+            header display="flex" align-items="center" justify-content="space-between" padding="8px 16px"
+              text "Settings" role="heading"
+              button id="back" press=back buttonStyle="bordered-prominent" aria-label="Done" testId="settings-done"
+                image "symbol:checkmark"
+            list id="settings-form" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+              if pending(settings) and not current(settings)
+                section
+                  row justify-content="center"
+                    progress aria-label="Loading" testId="settings-loading"
+              else if failed(settings) and settings.models.length == 0
+                section
+                  row
+                    text "Can’t reach your Hindsight server. Check that this phone is on your tailnet." color="-exact-system-red" flex=1 min-width=0 testId="settings-error"
+              else
+                // One list of models, under the agent that runs each. A tap moves the
+                // checkmark; the choice is saved at once.
+                for a in settings.agents key=a.name
+                  section
+                    header
+                      text a.name
+                    for m in settings.models.filter(m => m.group == a.name) key=m.id
+                      row
+                        column flex=1 min-width=0 gap=2 padding-top=4 padding-bottom=4
+                          text m.name
+                          if m.description != ""
+                            text m.description font="-exact-subheadline" color="-exact-secondary-label"
+                        input type="radio" name="model" value=m.id checked=(settings.model == m.id) change=chooseModel
+                          disabled=(pending(tuned) or not a.ready or settings.agent != "codex") aria-label=m.name testId=`settings-model-${m.id}`
+                    footer
+                      text (a.ready ? a.status : `${a.status} on the server, so these can’t run yet.`) testId=`agent-${a.name}`
+                section
+                  row
+                    text "Reasoning effort"
+                    select value=settings.effort change=chooseEffort aria-label="Reasoning effort" disabled=pending(tuned) testId="settings-effort"
+                      for f in settings.efforts key=f.id
+                        option f.name value=f.id
+                  footer
+                    text (settings.agent != "codex" ? "The mock agent calls no model, so these have no effect until the server runs real backtests." : settings.modelOffered ? "The model and effort are used for new backtests and refinements, unless a strategy has its own model (the … menu on a strategy)." : `${settings.model} isn’t offered to this account. Choose a model above.`) testId="settings-hint"
+                if tuneError != ""
+                  section
+                    row
+                      text tuneError color="-exact-system-red" flex=1 min-width=0 testId="settings-refusal"
+      dialog id="remove" role="alertdialog" aria-label="Delete Strategy?"
+        text "Its backtests and conversation are deleted. This can’t be undone."
+        button press=remove destructive=true commandfor="remove" command="close" testId="remove-confirm"
+          text "Delete"
+        button commandfor="remove" command="close" testId="remove-cancel"
+          text "Cancel"
+
+// A list row: the name over its one-line description; trailing, the sparkline, then what
+// the portfolio ended at over its return. A spinner while it runs, a badge when it failed.
+component StrategyRow
+  props
+    row: Row
+    index: number
+  view
+    column flex=1 min-width=0 gap=2 padding-top=6 padding-bottom=6
+      text row.name font-weight=600 testId=`strategy-name-${index}`
+      text (row.description != "" ? row.description : row.periodText) font="-exact-subheadline" color="-exact-secondary-label"
+    if row.status == "running"
+      // One pill: the spinner and the word together.
+      row flex-shrink=0 align-items="center" gap=6 padding="5px 11px 5px 8px" border-radius=999 background-color="-exact-fill" testId=`strategy-running-${index}`
+        progress width=16 height=16 aria-label="Running"
+        text "Running" font="-exact-footnote" font-weight=600
+    else if row.hasResult
+      if row.spark != ""
+        svg width=52 height=26 flex-shrink=0 viewBox=row.sparkBox preserveAspectRatio="none" color=tone(row.up) aria-hidden=true
+          path d=row.spark fill="none" stroke="currentcolor" stroke-width=1.5 stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"
+      // The return is a tinted badge, not tinted text: the system's green is too light to read as ink.
+      column flex-shrink=0 align-items="flex-end" gap=3 testId=`strategy-return-${index}`
+        text row.valueText font="-exact-subheadline" font-variant-numeric="tabular-nums"
+        Badge(label=row.returnText, tint=some(tone(row.up)))
+    else
+      Badge(label="Failed", tint=some("-exact-system-red"))
+    image "symbol:forward-chevron"
+
+// The figures over a chart: what the readout is of, the value, its change as a badge, and
+// one more line (the dollars gained, or the benchmark on the day under the finger).
+component Readout
+  props
+    prefix: string
+    label: string
+    value: string
+    badge: string
+    up: bool
+    sub: string
+  view
+    column gap=4 min-width=0
+      text label font="-exact-footnote" color="-exact-secondary-label" testId=`${prefix}-meta`
+      // One figure on one line: at the largest text sizes it draws smaller rather than spill.
+      text value font="-exact-large-title" font-variant-numeric="tabular-nums"
+        -exact-fit="shrink" white-space="nowrap" testId=`${prefix}-value`
+      row align-items="center" gap=8 flex-wrap="wrap"
+        view flex-shrink=0 testId=`${prefix}-return`
+          Badge(label=badge, tint=some(tone(up)))
+        text sub color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`${prefix}-change`
+
+// The equity curve. A finger dragged across it moves a rule and a dot to the nearest day.
+// In the thread it leaves vertical drags to the scroll (`touch` "pan-y") and writes the day
+// on itself (`note`, `note2`); on its own screen every drag is the chart's and the readout
+// above it follows.
+component Plot
+  props
+    plot: string
+    box: string
+    line: string
+    area: string
+    bench: string
+    up: bool
+    marked: bool
+    x: number
+    y: number
+    benchY: number
+    height: number
+    touch: string
+    note: string
+    note2: string
+    label: string
+    scrub: action
+    release: action
+  view
+    view id=plot testId=plot position="relative" height=height touch-action=touch user-select="none"
+      pointerdown=scrub pointermove=scrub pointerup=release role="img" aria-label=label
+      svg position="absolute" top=0 left=0 width="100%" height="100%" viewBox=box preserveAspectRatio="none" color=tone(up) aria-hidden=true
+        path d=area fill="currentcolor" fill-opacity=0.12 stroke="none"
+        if bench != ""
+          path d=bench fill="none" stroke="-exact-secondary-label" stroke-width=1.5 stroke-dasharray="5 4" stroke-linejoin="round" vector-effect="non-scaling-stroke"
+        path d=line fill="none" stroke="currentcolor" stroke-width=2 stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"
+      if marked
+        view position="absolute" top=0 bottom=0 left=percent(x) width=1 margin-left=-0.5 background-color="-exact-secondary-label" pointer-events="none"
+        if bench != ""
+          view position="absolute" left=percent(x) top=percent(benchY) width=8 height=8 margin-left=-4 margin-top=-4 border-radius=4 background-color="-exact-secondary-label" pointer-events="none"
+        view position="absolute" left=percent(x) top=percent(y) width=12 height=12 margin-left=-6 margin-top=-6 border-radius=6 background-color=tone(up) border="2px solid -exact-background" pointer-events="none" testId=`${plot}-mark`
+        // The day's figures, on the side the finger is not.
+        if note != ""
+          column position="absolute" top=4 left=(x > 0.5 ? "4px" : "auto") right=(x > 0.5 ? "auto" : "4px") padding="4px 8px" gap=1 border-radius=10
+            background-color="-exact-secondary-background" pointer-events="none" testId=`${plot}-note`
+            text note font="-exact-caption1" font-variant-numeric="tabular-nums" white-space="nowrap"
+            if note2 != ""
+              text note2 font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" white-space="nowrap"
+
+// The years along the curve: the first at the left edge, the last at the right, the rest
+// centred on their place.
+component Axis
+  props
+    ticks: Tick[]
+  view
+    view position="relative" height=16 aria-hidden=true
+      for t in ticks key=t.label
+        text t.label font="-exact-caption2" color="-exact-secondary-label" font-variant-numeric="tabular-nums" position="absolute" top=0
+          left=(t.at >= 1 ? "auto" : percent(t.at)) right=(t.at >= 1 ? "0px" : "auto") translate=(t.at > 0 and t.at < 1 ? "-50% 0px" : "0px 0px")
+
+// What each line is, and how the strategy did against holding the benchmark.
+component Legend
+  props
+    prefix: string
+    up: bool
+    returnText: string
+    ticker: string
+    benchReturnText: string
+    edge: string
+    error: string
+  view
+    column gap=6
+      row align-items="center" gap=16 flex-wrap="wrap"
+        row align-items="center" gap=6
+          view width=10 height=10 border-radius=5 flex-shrink=0 background-color=tone(up)
+          text "Strategy" font="-exact-footnote" color="-exact-secondary-label"
+          text returnText font="-exact-footnote" font-variant-numeric="tabular-nums"
+        if ticker != ""
+          row align-items="center" gap=6
+            view width=12 height=2 border-radius=1 flex-shrink=0 background-color="-exact-secondary-label"
+            text ticker font="-exact-footnote" color="-exact-secondary-label" testId=`${prefix}-ticker`
+            text benchReturnText font="-exact-footnote" font-variant-numeric="tabular-nums"
+      if edge != ""
+        text edge font="-exact-footnote" testId=`${prefix}-edge`
+      if error != ""
+        text error font="-exact-footnote" color="-exact-secondary-label" testId=`${prefix}-compare-error`
+
+// One message of the thread: yours at the right in the accent, Hindsight's at the left as
+// formatted text, a note from the system centred between them.
+component Bubble
+  props
+    m: Message
+  view
+    if m.role == "system"
+      text m.text font="-exact-footnote" color="-exact-secondary-label" text-align="center" padding="6px 24px" testId=`message-${m.id}`
+    else if m.role == "user"
+      column align-items="flex-end" padding="3px 16px" gap=3
+        text m.text padding="8px 13px" border-radius=18 max-width="82%" overflow-wrap="anywhere" white-space="pre-wrap"
+          background-color="AccentColor" color="AccentColorText" testId=`message-${m.id}`
+        if m.note != ""
+          text m.note font="-exact-caption1" color="-exact-secondary-label" padding="0 6px"
+    else
+      column align-items="flex-start" padding="3px 16px" gap=3
+        text m.text markup="markdown" padding="9px 13px" border-radius=18 max-width="92%" overflow-wrap="anywhere"
+          background-color="-exact-fill" color="-exact-label" testId=`message-${m.id}`
+        if m.note != ""
+          text m.note font="-exact-caption1" color="-exact-secondary-label" padding="0 6px"
+
+// The run in flight, where the next answer will land: a bar chart with a wave of light
+// passing through it, the status word and elapsed time, each step as it completes, and a
+// quote to wait by, changed every ten seconds.
+component RunCard
+  props
+    detail: Detail
+    quote: string
+    by: string
+  view
+    column margin="8px 16px 4px 16px" padding=16 gap=16 border-radius=20 background-color="-exact-secondary-background" testId="run"
+      row height=64 align-items="flex-end" justify-content="space-between" aria-hidden=true
+        for h, i in [14, 20, 17, 27, 23, 33, 28, 39, 34, 45, 40, 51, 46, 56, 52, 62] key=h
+          view width=9 height=h border-radius=4.5 background-color="-exact-system-green"
+            animation=`wave 1000ms ease-in-out ${i * 75}ms infinite alternate both`
+      row gap=12 align-items="center"
+        progress aria-label="Running"
+        column flex=1 min-width=0 gap=1
+          text (detail.statusLabel != "" ? detail.statusLabel : "Starting…") font-weight=600 testId="run-status"
+          text (detail.agentName != "" ? `${detail.agentName} · ${detail.modelName}` : "Mock agent") font="-exact-footnote" color="-exact-secondary-label" testId="run-agent"
+        text detail.elapsedText color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="run-elapsed"
+      if detail.steps.length > 0
+        column gap=10
+          for s in detail.steps key=s.id
+            row gap=10 align-items="center"
+              image (s.done ? "symbol:checkmark" : "symbol:circle") color=(s.done ? "-exact-system-green" : "-exact-secondary-label") aria-hidden=true
+              text s.label font="-exact-subheadline" color=(s.done ? "-exact-secondary-label" : "-exact-label") flex=1 min-width=0
+      hr
+      for q in [quote] key=q
+        column gap=4 animation="arrive 600ms ease-out both" testId="run-quote"
+          text `“${q}”` font="-exact-subheadline" font-style="italic"
+          text by font="-exact-footnote" color="-exact-secondary-label"
+      text "A real backtest takes a few minutes. You can leave this screen and come back." font="-exact-footnote" color="-exact-secondary-label"
+
+// What the server refused, floating over the end of the thread above the composer: a
+// refinement that could not start, or a model that could not be set.
+component ThreadNotice
+  props
+    refusal: string
+    assignRefusal: string
+  view
+    if refusal != "" or assignRefusal != ""
+      row position="absolute" left=12 right=12 bottom=8 z-index=3 padding="10px 14px" gap=10 align-items="center" border-radius=16
+        backgroundMaterial="thin" box-shadow="0 4px 16px rgba(0, 0, 0, 0.25)" role="alert" testId="thread-notice"
+        image "symbol:alert" color="-exact-system-red" aria-hidden=true
+        text (refusal != "" ? refusal : assignRefusal) font="-exact-subheadline" flex=1 min-width=0 testId="refine-error"
+
+// One turn of the brainstorm: yours at the right in the accent, Hindsight's at the left
+// as formatted text.
+component Talk
+  props
+    mine: bool
+    body: string
+    name: string
+  view
+    if mine
+      column align-items="flex-end" padding="3px 16px"
+        text body padding="8px 13px" border-radius=18 max-width="82%" overflow-wrap="anywhere" white-space="pre-wrap"
+          background-color="AccentColor" color="AccentColorText" testId=`talk-${name}`
+    else
+      column align-items="flex-start" padding="3px 16px"
+        text body markup="markdown" padding="9px 13px" border-radius=18 max-width="92%" overflow-wrap="anywhere"
+          background-color="-exact-fill" color="-exact-label" testId=`talk-${name}`

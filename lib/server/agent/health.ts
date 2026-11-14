@@ -6,12 +6,18 @@
 // Checking the file up front lets the API refuse cleanly and the UI say why.
 //
 // 'mock' mode needs no credentials and is always ready.
+//
+// Readiness is asked per agent: a run on a Claude model needs Claude Code's
+// credential (lib/server/models `claudeTokenFile()`), not Codex's. With no
+// model named, the answer is about the app-wide model's agent.
 // ============================================================================
 
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
-import type { AgentHealth } from '@/lib/types';
+import type { AgentHealth, AgentProvider } from '@/lib/types';
+import { claudeSignedIn, claudeTokenFile, providerOf } from '@/lib/server/models';
+import { getSettings } from '@/lib/server/settings';
 
 const DEFAULT_CODEX_HOME = '~/.codex';
 /** Re-stat at most this often; the home page polls, and this hits the disk. */
@@ -23,12 +29,12 @@ function expandHome(p: string): string {
   return p;
 }
 
-function ok(agent: AgentHealth['agent'], codexHome: string | null): AgentHealth {
-  return { agent, ready: true, reason: null, hint: null, codexHome };
+function ok(agent: AgentHealth['agent'], codexHome: string | null, provider?: AgentProvider): AgentHealth {
+  return { agent, ready: true, reason: null, hint: null, codexHome, ...(provider ? { provider } : {}) };
 }
 
 function notReady(reason: string, hint: string, codexHome: string): AgentHealth {
-  return { agent: 'codex', ready: false, reason, hint, codexHome };
+  return { agent: 'codex', ready: false, reason, hint, codexHome, provider: 'codex' };
 }
 
 /** True if auth.json actually carries a usable credential. */
@@ -46,10 +52,22 @@ function hasCredential(raw: string): boolean {
   return typeof token === 'string' && token.trim().length > 0;
 }
 
-let cached: { at: number; value: AgentHealth } | null = null;
+const cached = new Map<AgentProvider, { at: number; value: AgentHealth }>();
 
-async function compute(): Promise<AgentHealth> {
-  if (process.env.HINDSIGHT_AGENT !== 'codex') return ok('mock', null);
+async function computeClaude(): Promise<AgentHealth> {
+  if (await claudeSignedIn()) return ok('codex', null, 'claude');
+  return {
+    agent: 'codex',
+    ready: false,
+    reason: 'Claude Code is not signed in on this machine.',
+    hint: `No credential at ${claudeTokenFile()}. Run \`claude setup-token\` and save the token there, then reload.`,
+    codexHome: null,
+    provider: 'claude',
+  };
+}
+
+async function compute(provider: AgentProvider): Promise<AgentHealth> {
+  if (provider === 'claude') return computeClaude();
 
   const codexHome = expandHome(process.env.HINDSIGHT_CODEX_HOME || DEFAULT_CODEX_HOME);
   const authPath = path.join(codexHome, 'auth.json');
@@ -73,19 +91,30 @@ async function compute(): Promise<AgentHealth> {
     );
   }
 
-  return ok('codex', codexHome);
+  return ok('codex', codexHome, 'codex');
 }
 
-/** Current agent readiness (cached for a few seconds). */
-export async function getAgentHealth(): Promise<AgentHealth> {
+/** One agent's readiness (cached for a few seconds). Always ready with the mock agent. */
+export async function getProviderHealth(provider: AgentProvider): Promise<AgentHealth> {
+  if (process.env.HINDSIGHT_AGENT !== 'codex') return ok('mock', null);
   const now = Date.now();
-  if (cached && now - cached.at < CACHE_TTL_MS) return cached.value;
-  const value = await compute();
-  cached = { at: now, value };
+  const hit = cached.get(provider);
+  if (hit && now - hit.at < CACHE_TTL_MS) return hit.value;
+  const value = await compute(provider);
+  cached.set(provider, { at: now, value });
   return value;
+}
+
+/**
+ * Can a run on `model` start right now? With no model named, the app-wide
+ * one (lib/server/settings) is asked about.
+ */
+export async function getAgentHealth(model?: string | null): Promise<AgentHealth> {
+  if (process.env.HINDSIGHT_AGENT !== 'codex') return ok('mock', null);
+  return getProviderHealth(providerOf(model || (await getSettings()).model));
 }
 
 /** Forget the cached result — used after a failed run so a fresh login shows up. */
 export function invalidateAgentHealth(): void {
-  cached = null;
+  cached.clear();
 }

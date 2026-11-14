@@ -3,7 +3,8 @@
 # ----------------------------------------------------------------------------
 # This image is spawned once per run by the CodexRunner (agent layer) as:
 #   docker run --rm --name <n> -e HS_KIND=<initial|refine|rerun|refresh> \
-#     [-e HS_MODEL -e HS_PROMPT] -v <hostWorkDir>:/work -v <codexHome>:/codex-host:ro \
+#     [-e HS_PROVIDER=<codex|claude> -e HS_MODEL -e HS_PROMPT] -v <hostWorkDir>:/work \
+#     -v <codexHome>:/codex-host:ro [-v <claudeTokenFile>:/claude-host/token:ro] \
 #     hindsight-agent:latest
 #
 # The host Codex home is mounted read-only at /codex-host; the entrypoint copies
@@ -11,7 +12,9 @@
 # start when its home is read-only).
 #
 # For `initial`/`refine` the entrypoint runs the Codex CLI against /work (which
-# Codex reads AGENTS.md from). For `rerun`/`refresh` it just re-executes the
+# Codex reads AGENTS.md from), or, with HS_PROVIDER=claude, Claude Code (which
+# reads the same instructions as CLAUDE.md), signed in with the token mounted
+# at /claude-host/token. For `rerun`/`refresh` it just re-executes the
 # previously-generated /work/strategy.py — no LLM involved, no network needed
 # for the CLI itself (the strategy script may still hit the network for data).
 # ============================================================================
@@ -39,6 +42,20 @@ RUN apt-get update \
 # on-disk auth/session format under ~/.codex must stay compatible.
 # ---------------------------------------------------------------------------
 RUN npm install -g @openai/codex@0.144.6
+
+# ---------------------------------------------------------------------------
+# Claude Code CLI — the second agent (HS_PROVIDER=claude). Installed with its
+# native installer (a standalone binary: the npm package needs a newer Node
+# than this image carries) and pinned, so a rebuild is reproducible.
+# ---------------------------------------------------------------------------
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- 2.1.325 \
+    && cp -L /root/.local/bin/claude /usr/local/bin/claude \
+    && chmod 755 /usr/local/bin/claude \
+    && rm -rf /root/.local/bin/claude /root/.local/share/claude \
+    && claude --version
+# The binary sits in /usr/local/bin so any user the container runs as can
+# start it; it never updates itself inside a disposable container.
+ENV DISABLE_AUTOUPDATER=1
 
 # ---------------------------------------------------------------------------
 # Python deps for backtests: data fetch (yfinance/pandas-datareader/requests +

@@ -2,7 +2,8 @@
 
 // 32px circular gear button (sibling of ThemeToggle in the header) that opens
 // a small settings dialog: which model runs the backtests, at what reasoning
-// effort, and whether Codex is signed in on this machine.
+// effort, and whether Codex is signed in on this machine. The models offered
+// are the ones Codex lists for the signed-in account (GET /api/models).
 //
 // Selections persist immediately (PUT /api/settings, optimistic with revert on
 // failure) — no Save button, matching how the theme control behaves. Settings
@@ -11,17 +12,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { AgentHealth, AppSettings, CodexEffort } from '@/lib/types';
-import { CODEX_EFFORTS, CODEX_MODELS } from '@/lib/types';
-import { getAgentHealth, getSettings, updateSettings } from '@/lib/client/api';
-
-// All gpt-5.6 — the user picks the variant; the row shows the variant name
-// with the full model id muted beside it.
-const MODEL_OPTIONS: { value: (typeof CODEX_MODELS)[number]; label: string; description: string }[] = [
-  { value: 'gpt-5.6-sol', label: 'Sol', description: 'gpt-5.6-sol — default' },
-  { value: 'gpt-5.6-terra', label: 'Terra', description: 'gpt-5.6-terra' },
-  { value: 'gpt-5.6-luna', label: 'Luna', description: 'gpt-5.6-luna' },
-];
+import type { AgentHealth, AppSettings, CodexEffort, CodexModelInfo } from '@/lib/types';
+import { CODEX_EFFORTS } from '@/lib/types';
+import { getAgentHealth, getModels, getSettings, updateSettings } from '@/lib/client/api';
 
 const EFFORT_LABELS: Record<CodexEffort, string> = {
   minimal: 'Minimal',
@@ -113,6 +106,7 @@ export default function SettingsControl() {
   const [open, setOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [health, setHealth] = useState<AgentHealth | null>(null);
+  const [models, setModels] = useState<CodexModelInfo[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -125,10 +119,11 @@ export default function SettingsControl() {
     let cancelled = false;
     setLoaded(false);
     setSaveError(null);
-    void Promise.allSettled([getSettings(), getAgentHealth()]).then(([s, h]) => {
+    void Promise.allSettled([getSettings(), getAgentHealth(), getModels()]).then(([s, h, m]) => {
       if (cancelled) return;
       if (s.status === 'fulfilled') setSettings(s.value);
       setHealth(h.status === 'fulfilled' ? h.value : null);
+      setModels(m.status === 'fulfilled' ? m.value.models : []);
       setLoaded(true);
     });
     return () => {
@@ -167,6 +162,10 @@ export default function SettingsControl() {
   };
 
   const mockMode = health?.agent === 'mock';
+  // The efforts the selected model accepts; every effort until the list loads
+  // (or when the configured model is not one Codex offers).
+  const offeredEfforts: readonly CodexEffort[] =
+    models.find((m) => m.id === settings?.model)?.efforts ?? CODEX_EFFORTS;
 
   return (
     <>
@@ -282,7 +281,8 @@ export default function SettingsControl() {
                     <div style={{ marginBottom: 18 }}>
                       <SectionLabel>Model</SectionLabel>
                       <div role="radiogroup" aria-label="Model">
-                        {MODEL_OPTIONS.map((option) => {
+                        {models.map((model) => {
+                          const option = { value: model.id, label: model.name, description: model.id };
                           const active = option.value === settings.model;
                           return (
                             <button
@@ -335,9 +335,9 @@ export default function SettingsControl() {
                             </button>
                           );
                         })}
-                        {!CODEX_MODELS.includes(settings.model as (typeof CODEX_MODELS)[number]) ? (
+                        {!models.some((m) => m.id === settings.model) ? (
                           <div style={{ fontSize: 12, color: 'var(--muted)', padding: '6px 10px 0' }}>
-                            Currently set to “{settings.model}” (from configuration).
+                            Currently set to “{settings.model}”, which Codex doesn’t offer this account.
                           </div>
                         ) : null}
                       </div>
@@ -350,7 +350,7 @@ export default function SettingsControl() {
                         aria-label="Reasoning effort"
                         style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}
                       >
-                        {CODEX_EFFORTS.map((effort) => {
+                        {offeredEfforts.map((effort) => {
                           const active = effort === settings.effort;
                           return (
                             <button

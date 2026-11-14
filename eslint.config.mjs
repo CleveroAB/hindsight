@@ -8,7 +8,8 @@ const config = [
   ...coreWebVitals,
   ...typescript,
   {
-    ignores: ['node_modules/**', '.next/**', 'data/**', 'unzipped_ui/**'],
+    // mobile/ is the Exact iPhone app: its own toolchain checks it (`bun exact.mjs contract build`).
+    ignores: ['node_modules/**', '.next/**', 'data/**', 'unzipped_ui/**', 'mobile/**'],
   },
   {
     rules: {

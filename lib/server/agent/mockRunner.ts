@@ -63,6 +63,16 @@ function buildSummary(
   );
 }
 
+/**
+ * HINDSIGHT_MOCK_SPEED=20 plays the mock timeline 20× faster. The phone app's
+ * tests set it so a whole create → run → result pass takes a fraction of a
+ * second; unset (or invalid) keeps the believable real-time pacing.
+ */
+function mockSpeed(): number {
+  const speed = Number(process.env.HINDSIGHT_MOCK_SPEED);
+  return Number.isFinite(speed) && speed > 0 ? speed : 1;
+}
+
 export class MockRunner implements AgentRunner {
   readonly kind = 'mock' as const;
 
@@ -231,11 +241,12 @@ export class MockRunner implements AgentRunner {
           { at: 3500 + jitter, run: resolveResult },
         ];
 
+    const speed = mockSpeed();
     for (const { at, run } of timeline) {
       timers.push(
         setTimeout(() => {
           if (!settled) run();
-        }, at),
+        }, at / speed),
       );
     }
 

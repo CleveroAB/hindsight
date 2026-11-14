@@ -12,12 +12,17 @@
 //
 // Wiring (see PROTOCOL §2/§3/§4 and .env.example):
 //   docker run --rm --name <cname>
-//     -e HS_KIND=<kind> [-e HS_MODEL=<model> -e HS_EFFORT=<effort> -e HS_PROMPT=<prompt>]
-//     -v <workDir>:/work -v <codexHome>:/codex-host:ro <image>
+//     -e HS_KIND=<kind> [-e HS_PROVIDER=<codex|claude> -e HS_MODEL=<model>
+//     -e HS_EFFORT=<effort> -e HS_PROMPT=<prompt>]
+//     -v <workDir>:/work -v <codexHome>:/codex-host:ro
+//     [-v <claudeTokenFile>:/claude-host/token:ro] <image>
 //   The image's entrypoint dispatches on HS_KIND:
 //     rerun/refresh -> `python /work/strategy.py`
 //     initial/refine -> `codex exec --dangerously-bypass-approvals-and-sandbox -C /work
-//                        -m "$HS_MODEL" -c model_reasoning_effort="$HS_EFFORT" "$HS_PROMPT"`
+//                        -m "$HS_MODEL" -c model_reasoning_effort="$HS_EFFORT" "$HS_PROMPT"`,
+//                       or with HS_PROVIDER=claude (a Claude model)
+//                       `claude -p "$HS_PROMPT" --model "$HS_MODEL" --effort "$HS_EFFORT"
+//                        --dangerously-skip-permissions`
 //   Model + effort are snapshotted from the settings store by the run manager
 //   (with a direct-call fallback here) so persisted provenance matches Codex.
 // ============================================================================
@@ -31,7 +36,9 @@ import type { AgentRunner, RunHandle, RunInput } from '@/lib/agent-runner';
 import { STATUS_WORDS } from '@/lib/agent-runner';
 import type { AgentEvent, EquityPoint, Period, PositionsPoint, StatusWord, StrategyResult } from '@/lib/types';
 import { hashSeed } from '@/lib/chart';
+import { claudeTokenFile, effortFor, providerOf } from '@/lib/server/models';
 import { getSettingsSync } from '@/lib/server/settings';
+import { dockerUserArgs } from './dockerUser';
 import { buildCodexPrompt } from './prompt';
 
 const DEFAULT_IMAGE = 'hindsight-agent:latest';
@@ -414,7 +421,7 @@ export class CodexRunner implements AgentRunner {
     };
 
     // ---- build docker args --------------------------------------------------
-    const args: string[] = ['run', '--rm', '--name', cname, '-e', `HS_KIND=${kind}`];
+    const args: string[] = ['run', '--rm', '--name', cname, ...dockerUserArgs(), '-e', `HS_KIND=${kind}`];
     if (kind === 'initial' || kind === 'refine') {
       // The run manager supplies one atomic settings snapshot so the values
       // passed to Codex are exactly the ones persisted on the response. Keep a
@@ -422,11 +429,26 @@ export class CodexRunner implements AgentRunner {
       const current = input.model && input.effort
         ? { model: input.model, effort: input.effort }
         : getSettingsSync();
-      const { model, effort } = current;
+      const { model } = current;
+      // The agent is the model's (a Claude model runs on Claude Code, which
+      // has no `minimal` effort); the entrypoint dispatches on HS_PROVIDER.
+      const provider = providerOf(model);
+      const effort = effortFor(model, current.effort);
       const codexPrompt = buildCodexPrompt({ session, kind, message, attachments });
       // spawn() takes an argv array (no shell), so the prompt is a single, safely
       // quoted argument regardless of its content.
-      args.push('-e', `HS_MODEL=${model}`, '-e', `HS_EFFORT=${effort}`, '-e', `HS_PROMPT=${codexPrompt}`);
+      args.push(
+        '-e', `HS_PROVIDER=${provider}`,
+        '-e', `HS_MODEL=${model}`,
+        '-e', `HS_EFFORT=${effort}`,
+        '-e', `HS_PROMPT=${codexPrompt}`,
+      );
+      // Claude Code's credential is one small file, mounted read-only where
+      // the entrypoint reads it — never an env var, which the docker command
+      // line would show to any local user.
+      if (provider === 'claude') {
+        args.push('-v', `${claudeTokenFile()}:/claude-host/token:ro`);
+      }
       // Attached images become `codex exec -i <path>` args inside the container.
       // Newline-separated because upload names are [A-Za-z0-9_-].ext — no
       // newlines possible — and the entrypoint splits on exactly that.

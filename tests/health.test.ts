@@ -7,17 +7,25 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { getAgentHealth, invalidateAgentHealth } from '@/lib/server/agent/health';
+import { getAgentHealth, getProviderHealth, invalidateAgentHealth } from '@/lib/server/agent/health';
+import { withTempDataDir } from './helpers';
 
 let codexHome = '';
 const saved: Record<string, string | undefined> = {};
 
+// With no model named, readiness is asked of the app-wide model's agent, so
+// the settings these tests see must be their own: an empty data directory
+// (the default model, a Codex one) and no Claude credential.
+withTempDataDir();
+
 beforeAll(async () => {
-  for (const key of ['HINDSIGHT_AGENT', 'HINDSIGHT_CODEX_HOME']) {
+  for (const key of ['HINDSIGHT_AGENT', 'HINDSIGHT_CODEX_HOME', 'HINDSIGHT_CODEX_MODEL', 'HINDSIGHT_CLAUDE_TOKEN_FILE']) {
     saved[key] = process.env[key];
   }
   codexHome = await mkdtemp(path.join(tmpdir(), 'hindsight-codex-'));
   process.env.HINDSIGHT_CODEX_HOME = codexHome;
+  delete process.env.HINDSIGHT_CODEX_MODEL;
+  process.env.HINDSIGHT_CLAUDE_TOKEN_FILE = path.join(codexHome, 'claude-token');
 });
 
 afterAll(async () => {
@@ -125,5 +133,45 @@ describe('caching', () => {
     // ...and invalidating (what the tab-focus re-check does) sees the new state.
     invalidateAgentHealth();
     expect((await getAgentHealth()).ready).toBe(true);
+  });
+});
+
+describe('Claude Code', () => {
+  const tokenFile = () => path.join(codexHome, 'claude-token');
+  afterEach(async () => {
+    await rm(tokenFile(), { force: true });
+  });
+
+  test('a Claude model is ready only with Claude’s credential, whatever Codex has', async () => {
+    process.env.HINDSIGHT_AGENT = 'codex';
+    await writeAuth(JSON.stringify({ OPENAI_API_KEY: 'sk-test' }));
+    invalidateAgentHealth();
+
+    const missing = await getAgentHealth('claude-opus-5-5');
+    expect(missing.ready).toBe(false);
+    expect(missing.provider).toBe('claude');
+    expect(missing.reason).toBe('Claude Code is not signed in on this machine.');
+    expect(missing.hint).toContain('claude setup-token');
+    // The same moment, a Codex model can run.
+    expect((await getAgentHealth('gpt-5.6-terra')).ready).toBe(true);
+
+    await writeFile(tokenFile(), 'sk-ant-oat01-test\n', 'utf8');
+    invalidateAgentHealth();
+    const present = await getAgentHealth('claude-opus-5-5');
+    expect(present.ready).toBe(true);
+    expect(present.provider).toBe('claude');
+  });
+
+  test('an empty credential file is not a credential', async () => {
+    process.env.HINDSIGHT_AGENT = 'codex';
+    await writeFile(tokenFile(), '  \n', 'utf8');
+    invalidateAgentHealth();
+    expect((await getProviderHealth('claude')).ready).toBe(false);
+  });
+
+  test('the mock agent needs neither', async () => {
+    process.env.HINDSIGHT_AGENT = 'mock';
+    invalidateAgentHealth();
+    expect((await getAgentHealth('claude-opus-5-5')).ready).toBe(true);
   });
 });

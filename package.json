@@ -12,7 +12,9 @@
   "scripts": {
     "dev": "bun scripts/dev.mjs",
     "build": "next build",
-    "start": "next start",
+    "start": "bun scripts/dev.mjs start",
+    "api": "bun server/index.ts",
+    "test": "bun test tests",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "seed": "node scripts/seed.mjs",
@@ -25,6 +27,7 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
+    "@types/bun": "^1.4.4",
     "@types/node": "^20.14.0",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",

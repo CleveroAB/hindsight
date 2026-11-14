@@ -152,3 +152,38 @@ export function downsample(values: number[], target: number): number[] {
   }
   return out;
 }
+
+/**
+ * Annualized return in percent over the equity curve's actual traded span
+ * (which can be shorter than the requested period). Null when the curve is too
+ * short or the values can't support a geometric rate.
+ */
+export function cagrPct(result: {
+  equityCurve: { date: string }[];
+  startingCapital: number;
+  finalValue: number;
+}): number | null {
+  const curve = result.equityCurve;
+  if (curve.length < 2) return null;
+  const years =
+    (Date.parse(curve[curve.length - 1].date) - Date.parse(curve[0].date)) /
+    (365.25 * 24 * 60 * 60 * 1000);
+  if (!Number.isFinite(years) || years <= 0) return null;
+  if (result.startingCapital <= 0 || result.finalValue <= 0) return null;
+  return ((result.finalValue / result.startingCapital) ** (1 / years) - 1) * 100;
+}
+
+/**
+ * Deepest peak-to-trough fall of a value series, in percent (0 or negative).
+ * Null when the series is too short or never positive.
+ */
+export function maxDrawdownPct(values: number[]): number | null {
+  if (values.length < 2) return null;
+  let peak = values[0];
+  let worst = 0;
+  for (const v of values) {
+    if (v > peak) peak = v;
+    if (peak > 0) worst = Math.min(worst, (v / peak - 1) * 100);
+  }
+  return peak > 0 ? worst : null;
+}

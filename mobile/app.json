@@ -1,0 +1,39 @@
+{
+  "$schema": "../../exact/scripts/app.schema.json",
+  "name": "Hindsight",
+  "short_name": "Hindsight",
+  "id": "se.clevero.hindsight",
+  "start_url": "/",
+  "display": "standalone",
+  "app": {
+    "id": "se.clevero.hindsight",
+    "name": "Hindsight"
+  },
+  "host": {
+    "web": {},
+    "ios": {
+      "minimumOS": "17.0",
+      "deviceFamily": [
+        "iphone",
+        "ipad"
+      ]
+    }
+  },
+  "deploy": {
+    "store": {
+      "web": "0",
+      "ios": "0"
+    }
+  },
+  "env": [
+    "API_BASE_URL"
+  ],
+  "orientation": "portrait",
+  "description": "AI investment-strategy backtester",
+  "icons": [
+    {
+      "src": "assets/icon-1024.png",
+      "purpose": "any maskable"
+    }
+  ]
+}
