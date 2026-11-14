@@ -39,7 +39,8 @@ bun test --watch              # while working
 
 Two areas are worth extra care when you touch them:
 
-- **`tests/proxy.test.ts`** — the tunnel gate. This is the only thing keeping a
+- **`tests/proxy.test.ts`** and **`tests/server.test.ts`** — the tunnel gate
+  (`lib/gate.ts`) and the API server's two listeners. This is the only thing keeping a
   share link from exposing the whole app and API (see [SECURITY.md](SECURITY.md)).
   Add a case for every new path or header you teach it about.
 - **`tests/agentEvents.test.ts` and `tests/resultNormalize.test.ts`** — the
@@ -50,8 +51,9 @@ Tests that touch disk must call `withTempDataDir()` from `tests/helpers.ts`,
 which points `HINDSIGHT_DATA_DIR` at a throwaway directory — never write to the
 real `./data`.
 
-Not covered yet, and welcome: the API route handlers, the run manager's
-lifecycle and SSE fan-out, and the React components.
+Not covered yet, and welcome: most individual API route handlers, the run
+manager's lifecycle and SSE fan-out, and the React components. The iPhone app
+has its own tests (`cd mobile && bun exact.mjs test`).
 
 ## Ground rules
 

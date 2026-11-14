@@ -125,6 +125,8 @@ export interface CreateSessionInput {
    * (the names are already assigned, so this doesn't need the id first).
    */
   attachments?: Attachment[];
+  /** This strategy's own model (`Session.model`); null/absent follows the setting. */
+  model?: string | null;
 }
 
 /**
@@ -165,6 +167,7 @@ export async function createSession(input: CreateSessionInput): Promise<Session>
     ],
     backtests: [],
     dataSnapshotAt: null,
+    ...(input.model ? { model: input.model } : {}),
     createdAt: now,
     updatedAt: now,
   };

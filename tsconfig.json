@@ -39,6 +39,7 @@
   "exclude": [
     "node_modules",
     "unzipped_ui",
-    "docker"
+    "docker",
+    "mobile"
   ]
 }

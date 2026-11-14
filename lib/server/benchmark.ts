@@ -103,7 +103,8 @@ export function strategyTickersFromCode(code: string | undefined): string[] {
 /** A deliberately marked symbol in prose (`$AAPL` or `ticker AAPL`). */
 function explicitTickerFromText(text: string): string | null {
   const patterns = [
-    /\$([A-Z0-9][A-Z0-9.^-]{0,9})\b/g,
+    // A cashtag starts with a letter: `$10,000` is an amount, not the symbol `10`.
+    /\$([A-Z][A-Z0-9.^-]{0,9})\b/g,
     /\b(?:ticker|symbol)\s*(?:is\s+|[=:]\s*)?([A-Z0-9][A-Z0-9.^-]{0,9})\b/g,
   ];
   for (const pattern of patterns) {
@@ -411,4 +412,31 @@ export async function benchmarkCurve(
 
   const base = prices[0].value;
   return prices.map((p) => ({ date: p.date, value: (p.value / base) * startingCapital }));
+}
+
+/**
+ * The comparison presented for a session's result when the caller names no
+ * symbol: the reassessed benchmark's buy-and-hold curve. Recommendations are
+ * revalidated against live adjusted-price coverage, so an inferred or agent
+ * choice that lacks it falls back to the broad market. Throws (human-readable)
+ * when even that is unavailable.
+ */
+export async function presentedBenchmark(
+  session: Session,
+): Promise<BenchmarkSelection & { curve: EquityPoint[] }> {
+  const selected = selectBenchmark(session);
+  const startingCapital = session.result?.startingCapital ?? session.startingCapital;
+  try {
+    const curve = await benchmarkCurve(selected.ticker, session.period, startingCapital);
+    return { ...selected, curve };
+  } catch (err) {
+    if (selected.ticker === DEFAULT_BENCHMARK) throw err;
+    const curve = await benchmarkCurve(DEFAULT_BENCHMARK, session.period, startingCapital);
+    return {
+      ticker: DEFAULT_BENCHMARK,
+      reason: `${selected.reason} ${selected.ticker} lacked complete price coverage, so SPY is used as the validated fallback.`,
+      source: 'fallback',
+      curve,
+    };
+  }
 }

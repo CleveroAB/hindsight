@@ -191,6 +191,11 @@ The agent's chat summary should be honest about assumptions and any data gaps.
 
 ## 6. HTTP API
 
+Served by the Bun API server (`server/index.ts`; routes in `server/router.ts`,
+one handler module per resource under `server/routes/`). The web UI reaches it
+through a Next rewrite of `/api/*` and `/share/*`; the iPhone app calls it
+directly on the tailnet listener (below).
+
 All JSON. Errors: `{ "error": string }` with a 4xx/5xx status.
 
 | Method | Path                              | Body                 | Returns              |
@@ -208,6 +213,9 @@ All JSON. Errors: `{ "error": string }` with a 4xx/5xx status.
 | GET    | `/api/health`                     | —                    | `AgentHealth`        |
 | GET    | `/api/settings`                   | —                    | `AppSettings`        |
 | PUT    | `/api/settings`                   | `UpdateSettingsBody` | `AppSettings`        |
+| GET    | `/api/models`                     | —                    | `ModelsResponse`     |
+| POST   | `/api/ideas`                      | `IdeasBody`          | `IdeasReply`         |
+| PUT    | `/api/sessions/[id]/model`        | `SessionModelBody`   | `Session`            |
 | POST   | `/api/sessions/[id]/share`        | —                    | `ShareInfo`          |
 | DELETE | `/api/sessions/[id]/share`        | —                    | `{ ok: true }`       |
 | GET    | `/share/[token]`                  | —                    | self-contained HTML  |
@@ -215,6 +223,10 @@ All JSON. Errors: `{ "error": string }` with a 4xx/5xx status.
 | DELETE | `/api/sessions/[id]/activate`     | —                    | `Session`            |
 | POST   | `/api/sessions/[id]/activate/check` | —                  | `SignalCheckResponse` |
 | GET    | `/api/signals`                    | —                    | `SignalsOverview`    |
+| GET    | `/api/mobile/strategies`          | —                    | `MobileStrategyRow[]` (newest first) |
+| GET    | `/api/mobile/strategies/[id]`     | —                    | `MobileStrategy`     |
+| GET    | `/api/mobile/strategies/[id]/chart` | —                  | `MobileChart`        |
+| GET    | `/api/mobile/settings`            | —                    | `MobileSettings`     |
 
 Periods are validated where they enter: `POST /api/sessions` and
 `POST …/rerun` return **400** for a side that isn't `YYYY-MM-DD` or a window
@@ -236,9 +248,45 @@ tmp-file + rename, like sessions). The run manager snapshots it at run start and
 the CodexRunner passes `HS_MODEL` / `HS_EFFORT` to the container; the entrypoint forwards them
 as `codex exec -m <model> -c model_reasoning_effort=<effort>`. With no settings
 file, the model defaults to `HINDSIGHT_CODEX_MODEL` (else `gpt-5.6-sol`) and
-the effort to `medium`. PUT accepts a partial body but only the values in
-`CODEX_MODELS` / `CODEX_EFFORTS` (400 otherwise); `rerun`/`refresh` never use
+the effort to `medium`. PUT accepts a partial body but only a model from
+`/api/models` and an effort in `CODEX_EFFORTS` (400 otherwise); `rerun`/`refresh` never use
 either (no LLM). The mock runner ignores settings entirely.
+
+`/api/models` lists the models a run may use, asked of Codex itself
+(`lib/server/models`): `codex debug models` on the host, else the catalog the
+CLI last cached under its home (`models_cache.json`), else the built-in
+`CODEX_MODELS` (always, with the mock agent). Only models Codex marks for
+listing are offered, each with the reasoning efforts it accepts. `PUT
+/api/settings` refuses a model that is not on this list. A strategy may carry
+its own model (`Session.model`, set at creation with `CreateSessionBody.model`
+or later with `PUT /api/sessions/[id]/model`; `null` clears it): the run
+manager snapshots it over the app-wide model when an LLM-backed run starts.
+The change is refused with 409 while a run is in flight.
+
+A model's id names its agent (`providerOf`): ids starting with `claude` run on
+Claude Code, everything else on Codex. `/api/models` appends Claude's models
+(the newest of each family, from Anthropic's Models API) when a credential is
+saved at `HINDSIGHT_CLAUDE_TOKEN_FILE`. The CodexRunner then passes
+`HS_PROVIDER=claude` and mounts that file at `/claude-host/token:ro`; the
+entrypoint exports it and runs `claude -p "$HS_PROMPT" --model "$HS_MODEL"
+--effort "$HS_EFFORT" --dangerously-skip-permissions`, with `AGENTS.md` copied
+to `CLAUDE.md` so both agents read the same instructions. A response's
+`metadata.mode` is `claude` for such a run. Readiness is per agent: `POST`
+refuses a run (503) when the agent of the model it would use is signed out.
+
+`/api/ideas` is one turn of a brainstorm: shaping an idea into a strategy
+before anything is backtested (`lib/server/ideas`). The client sends the whole
+conversation (the server keeps none); the answer is what the assistant says and
+its current draft of the strategy as one prompt, `''` while the idea is too
+vague to test. It starts no run and no session: one `HS_KIND=chat` container
+answers `HS_PROMPT` under `HS_SYSTEM` with no tools and no `/work`, on the
+model's agent at low effort. Conversations are capped at 40 messages; the mock
+agent answers without a model.
+
+On Linux the container runs as the server's own `uid:gid` (`docker run
+--user`, see `lib/server/agent/dockerUser`), so the files it writes under the
+work directory stay replaceable by the server; Docker Desktop maps ownership
+itself and keeps the image's default user.
 
 In the expanded chat, successful-run metadata is visually attached beneath its
 agent response and revealed only while that response is hovered. Its `BT-###`
@@ -250,13 +298,59 @@ strategy sources were never archived, migration versions only the currently
 recoverable result and preserves its original completion ordinal (for example,
 a four-run legacy session exposes its current state as `BT-004`).
 
+### Phone views
+
+`/api/mobile/*` is the iPhone app's read side: the same sessions, reduced to
+what a screen shows. A full `Session` carries every archived version's curve
+and source; a `MobileStrategyRow` is a few hundred bytes. Text is formatted
+with `lib/format` and curves are SVG path data from `lib/chart` (the list's
+sparkline; the detail's line and area in an 800×300 box, thinned to 240
+points), so the phone and the web agree on every figure. `MobileStrategy` also
+folds in the live run's snapshot (`steps`, `statusLabel`, `elapsedText`; empty
+when idle) so the app polls one endpoint instead of holding the SSE stream
+open. Its chat is ready to draw: an agent message's `text` is Markdown (the
+summary subset of `lib/richText`, everything else escaped), a user's or a
+system note's is plain, and `note` is the small line under a bubble (`BT-002 ·
+41 seconds`).
+
+`MobileChart` is the result's curve to scrub, asked for once per result
+(`resultKey`/`key` is the result's `ranAt`): up to 240 `points`, each a day's
+formatted date, value and change with its place in the plot (0–1 from the top),
+plus the benchmark the web's Compare toggle shows, resolved by the same
+`presentedBenchmark` and forward-filled onto the strategy's trading days. It
+carries the paths twice — the strategy on its own scale, and strategy and
+benchmark on a shared one — so the phone can switch the comparison off without
+another request, and the headline `stats` (annualized return, max drawdown,
+benchmark return). When price data can't be loaded the chart still answers,
+with `benchError` in words and no benchmark. The phone writes through the regular routes (`POST /api/sessions`,
+`…/messages`, `…/interrupt`, `DELETE /api/sessions/[id]`).
+
+### Listeners
+
+The server listens twice, with one route table:
+
+- **Local** — `HINDSIGHT_API_HOST:HINDSIGHT_API_PORT` (default
+  `127.0.0.1:8787`). Applies the front-door gate (`lib/gate.ts`, below) to
+  every request, exactly as `proxy.ts` does for the web UI; the Next rewrite
+  forwards the visitor's forwarding headers and `Authorization`, so both
+  layers judge the same request. Browsers on other origins get no CORS grant
+  (and no preflight) unless `HINDSIGHT_CORS_ORIGINS` names their origin.
+- **Tailnet** — `127.0.0.1:HINDSIGHT_TAILNET_PORT`, started only when that
+  variable is set, for `tailscale serve` to front. Every request must carry
+  `Tailscale-User-Login` (which `tailscale serve` sets for tailnet users and
+  omits for Funnel traffic) or it is refused with 401;
+  `HINDSIGHT_TAILNET_USERS` narrows it to named logins (403 otherwise). The
+  header is trusted only on this listener.
+
 ### Sharing (tunnel-safe read-only pages)
 
 `POST …/share` does the whole job: mints an unguessable token (idempotent;
 stored on the session as `shareToken`), STARTS a cloudflared quick tunnel
-(`lib/server/tunnel.ts` — one per server process, reused across shares, state
-on globalThis so dev reloads don't orphan it), and returns the finished public
-link (`ShareInfo.url`). When `cloudflared` isn't installed it returns
+(`lib/server/tunnel.ts` — one per server process, reused across shares), and
+returns the finished public link (`ShareInfo.url`). The tunnel always targets
+the **web UI's** origin — `HINDSIGHT_WEB_ORIGIN`, else the host the browser
+used (`X-Forwarded-Host` from the rewrite), else `http://localhost:3000` —
+never the API server's own address, so tunnel visitors meet the gate first. When `cloudflared` isn't installed it returns
 `url: null` + `cloudflaredInstalled: false` and the popover says to install it;
 a tunnel that fails to start is a 502. `GET /share/[token]` serves the strategy
 as ONE self-contained HTML document (inline CSS, server-rendered SVG chart, no
@@ -264,7 +358,8 @@ JS, no `/_next` assets, no API calls). `DELETE …/share` revokes the token and
 closes the tunnel when no shared strategies remain (a revoked token 404s even
 while the tunnel drains).
 
-The safety layer is `proxy.ts` (root): a request is tunnel traffic when
+The safety layer is the front-door gate, `lib/gate.ts`, applied by `proxy.ts`
+(root) for the web UI and again by the API server's local listener: a request is tunnel traffic when
 any IP in its forwarding headers (`X-Forwarded-For` / `Cf-Connecting-Ip` /
 `X-Real-Ip`) is public, or `Cf-Ray` is present. (Presence alone can't be the
 signal — Next's dev server stamps `X-Forwarded-For: ::1` on local requests.
@@ -379,8 +474,8 @@ hydrated defensively on read like `backtests`.
    scheduled check it always sends the resulting message, HOLD included, and
    surfaces failures as 500 (busy/raced conflicts as 409). `GET /api/signals`
    returns `SignalsOverview` — the default phone, the configured provider, and
-   every activated strategy — and boots the scheduler as a fallback for
-   processes where `instrumentation.ts` did not run.
+   every activated strategy (touching it also re-inits the scheduler, which
+   is idempotent).
 2. **Cadence** is derived from the strategy itself
    (`lib/server/signals/cadence.ts`): the asset class from the saved code's
    tickers, the latest reported positions, and prompt/description wording
@@ -389,7 +484,7 @@ hydrated defensively on read like `backtests`.
    (`hourly | daily | weekly | monthly`, default daily). `cadenceReason` is
    the human explanation shown in the UI and in messages.
 3. **Scheduler** (`lib/server/signals/scheduler.ts`, a globalThis singleton
-   booted from `instrumentation.ts`): one timer armed at the earliest
+   booted when the API server starts): one timer armed at the earliest
    `nextCheckAt`, checks strictly one at a time; a session with a live backtest
    run is skipped and retried ~2 min later. Each check re-runs the accepted
    code in a **scratch workdir** at `${data}/signals/<id>/` (`HS_KIND=rerun`

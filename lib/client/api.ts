@@ -10,6 +10,7 @@ import type {
   AppSettings,
   BenchmarkResponse,
   CreateSessionBody,
+  ModelsResponse,
   RefineBody,
   RerunBody,
   Session,
@@ -181,6 +182,11 @@ export function getSettings(): Promise<AppSettings> {
 /** PUT /api/settings — partial update; returns the merged settings. */
 export function updateSettings(patch: UpdateSettingsBody): Promise<AppSettings> {
   return request<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify(patch) });
+}
+
+/** GET /api/models — the models Codex offers the signed-in account. */
+export function getModels(): Promise<ModelsResponse> {
+  return request<ModelsResponse>('/api/models');
 }
 
 /** GET /api/health — can the selected agent run a backtest right now? */
